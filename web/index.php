@@ -32,7 +32,7 @@ function elpis_url(array $params = []): string
         }
         $query[$key] = $value;
     }
-    unset($query['lang']);
+    unset($query['lang'], $query['_loaded']);
 
     $path = strtok((string) ($_SERVER['REQUEST_URI'] ?? 'index.php'), '?') ?: 'index.php';
     $query['lang'] = getCurrentLanguage();
@@ -169,6 +169,7 @@ if (is_array($discoveredSelection)) {
 }
 
 $projectManager = '';
+$deferProjectsLoad = !isset($_GET['_loaded']);
 
 $errorKey = '';
 $projectManagers = [];
@@ -201,7 +202,7 @@ try {
         );
     }
 
-    if ($projectManager !== '') {
+    if ($projectManager !== '' && !$deferProjectsLoad) {
         $projects = elpis_fetch_projects_for_manager($company, $projectManager);
         if ($projects !== []) {
             $projectNos = array_map(static function (array $project): string {
@@ -211,11 +212,11 @@ try {
         }
     }
 
-    if ($company !== '') {
+    if ($company !== '' && !$deferProjectsLoad) {
         elpis_save_dropdown_prefs($userEmail, $company, $projectManager);
     }
 
-    if ($openProjectNo !== '') {
+    if (!$deferProjectsLoad && $openProjectNo !== '') {
         if (isset($linesByProject[$openProjectNo])) {
             $planningLines = $linesByProject[$openProjectNo];
         } else {
@@ -540,11 +541,13 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
     <?php endif; ?>
 
     <?php if ($projectManager !== ''): ?>
-        <section class="elpis-card">
+        <section class="elpis-card"<?= $deferProjectsLoad ? ' data-elpis-deferred-load="1"' : '' ?>>
             <h2><?= elpis_h(LOC('elpis.section.projects')) ?></h2>
             <p class="elpis-muted"><?= elpis_h(LOC('elpis.meta.manager')) ?>: <?= elpis_h(elpis_is_all_managers_selection($projectManager) ? LOC('elpis.manager.all') : elpis_format_manager_label($projectManager)) ?></p>
 
-            <?php if ($projects === []): ?>
+            <?php if ($deferProjectsLoad): ?>
+                <ul class="elpis-project-list" id="elpis-project-list" aria-busy="true"></ul>
+            <?php elseif ($projects === []): ?>
                 <p class="elpis-muted"><?= elpis_h(LOC('elpis.empty.projects')) ?></p>
             <?php else: ?>
                 <div class="elpis-search-wrap">
@@ -890,28 +893,37 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
         }
     }
 
-    function runProgressAndNavigate(url) {
-        clearLoaderTimer();
-        showLoader();
-        resetStepsGrid(buildStepIds(url));
+    function runProgressAndNavigate(url, options) {
+        options = options || {};
+        var delayMs = typeof options.delayMs === 'number' ? options.delayMs : 0;
+        var loadTimer = null;
 
-        var progressUrl = new URL('elpis_progress.php', window.location.href);
-        var navigationStarted = false;
+        function startProgressLoad() {
+            clearLoaderTimer();
+            showLoader();
+            resetStepsGrid(buildStepIds(url));
 
-        url.searchParams.forEach(function (value, key) {
-            progressUrl.searchParams.set(key, value);
-        });
+            var progressUrl = new URL('elpis_progress.php', window.location.href);
+            var navigationStarted = false;
 
-        function finishNavigation() {
-            if (navigationStarted) {
-                return;
+            url.searchParams.forEach(function (value, key) {
+                if (key === '_loaded') {
+                    return;
+                }
+                progressUrl.searchParams.set(key, value);
+            });
+
+            function finishNavigation() {
+                if (navigationStarted) {
+                    return;
+                }
+                navigationStarted = true;
+                sessionStorage.setItem('elpis_skip_loader', '1');
+                url.searchParams.set('_loaded', '1');
+                navigateTo(url);
             }
-            navigationStarted = true;
-            sessionStorage.setItem('elpis_skip_loader', '1');
-            navigateTo(url);
-        }
 
-        fetch(progressUrl.toString()).then(function (response) {
+            fetch(progressUrl.toString()).then(function (response) {
             if (!response.ok || !response.body) {
                 throw new Error('progress failed');
             }
@@ -954,9 +966,17 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
             }
 
             return readChunk();
-        }).catch(function () {
-            finishNavigation();
-        });
+            }).catch(function () {
+                finishNavigation();
+            });
+        }
+
+        if (delayMs > 0) {
+            loadTimer = window.setTimeout(startProgressLoad, delayMs);
+            return;
+        }
+
+        startProgressLoad();
     }
 
     function shouldInterceptNavigation(event) {
@@ -1048,6 +1068,17 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
     if (sessionStorage.getItem('elpis_skip_loader')) {
         sessionStorage.removeItem('elpis_skip_loader');
         hideLoader();
+
+        var cleanUrl = new URL(window.location.href);
+        if (cleanUrl.searchParams.has('_loaded')) {
+            cleanUrl.searchParams.delete('_loaded');
+            window.history.replaceState({}, '', cleanUrl.pathname + cleanUrl.search);
+        }
+    }
+
+    var deferredProjectsSection = document.querySelector('[data-elpis-deferred-load="1"]');
+    if (deferredProjectsSection) {
+        runProgressAndNavigate(new URL(window.location.href), { delayMs: DELAY_MS });
     }
 })();
 
