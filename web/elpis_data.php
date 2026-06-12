@@ -18,6 +18,10 @@ const ELPI_DEFAULT_USER_EMAIL = 'localtester@kvt.nl';
 
 const ELPI_PROJECT_MANAGERS_TTL = 86400;
 
+const ELPI_MANAGER_ALL = '*';
+
+const ELPI_PLANNING_LINES_CHUNK_SIZE = 12;
+
 /**
  * Functies
  */
@@ -81,6 +85,25 @@ function elpis_companies_for_page(int $ttl = 3600): array
     }
 
     return elpis_default_companies();
+}
+
+function elpis_is_all_managers_selection(?string $value): bool
+{
+    return trim((string) $value) === ELPI_MANAGER_ALL;
+}
+
+function elpis_format_manager_label(string $manager): string
+{
+    if (elpis_is_all_managers_selection($manager)) {
+        return '';
+    }
+
+    $manager = elpis_normalize_bc_username($manager);
+    if (str_starts_with($manager, 'KVT\\')) {
+        return substr($manager, 4);
+    }
+
+    return $manager;
 }
 
 function elpis_normalize_bc_username(string $value): string
@@ -230,6 +253,15 @@ function elpis_resolve_manager_choice(
     array $savedManagersByCompany,
     ?string $email
 ): string {
+    if (elpis_is_all_managers_selection($requested)) {
+        return ELPI_MANAGER_ALL;
+    }
+
+    $savedForCompany = trim((string) ($savedManagersByCompany[$company] ?? ''));
+    if (elpis_is_all_managers_selection($savedForCompany) && (string) $requested === '') {
+        return ELPI_MANAGER_ALL;
+    }
+
     if ($managers === []) {
         return '';
     }
@@ -239,10 +271,11 @@ function elpis_resolve_manager_choice(
         return $fromRequest;
     }
 
-    $savedForCompany = trim((string) ($savedManagersByCompany[$company] ?? ''));
-    $fromSaved = elpis_pick_manager_from_list($managers, $savedForCompany);
-    if ($fromSaved !== '') {
-        return $fromSaved;
+    if (!elpis_is_all_managers_selection($savedForCompany)) {
+        $fromSaved = elpis_pick_manager_from_list($managers, $savedForCompany);
+        if ($fromSaved !== '') {
+            return $fromSaved;
+        }
     }
 
     $fromEmail = elpis_resolve_project_manager_from_email($email);
@@ -341,8 +374,40 @@ function elpis_fetch_project_managers(string $company, int $ttl = ELPI_PROJECT_M
     return array_values($managers);
 }
 
+function elpis_collect_projects_from_rows(array $rows): array
+{
+    $projects = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $normalized = elpis_normalize_project_row($row);
+        if ($normalized['no'] !== '') {
+            $projects[] = $normalized;
+        }
+    }
+
+    return $projects;
+}
+
+function elpis_fetch_projects_for_company(string $company, int $ttl = 3600): array
+{
+    $rows = elpis_try_fetch_rows($company, 'AppProjecten', [
+        '$select' => 'No,Description,Status,Project_Manager',
+        '$filter' => "Project_Manager ne ''",
+        '$orderby' => 'No desc',
+        '$top' => '500',
+    ], $ttl);
+
+    return elpis_collect_projects_from_rows($rows);
+}
+
 function elpis_fetch_projects_for_manager(string $company, string $projectManager, int $ttl = 3600): array
 {
+    if (elpis_is_all_managers_selection($projectManager)) {
+        return elpis_fetch_projects_for_company($company, $ttl);
+    }
+
     $manager = elpis_normalize_bc_username($projectManager);
     if ($manager === '') {
         return [];
@@ -356,18 +421,7 @@ function elpis_fetch_projects_for_manager(string $company, string $projectManage
         '$top' => '200',
     ], $ttl);
 
-    $projects = [];
-    foreach ($rows as $row) {
-        if (!is_array($row)) {
-            continue;
-        }
-        $normalized = elpis_normalize_project_row($row);
-        if ($normalized['no'] !== '') {
-            $projects[] = $normalized;
-        }
-    }
-
-    return $projects;
+    return elpis_collect_projects_from_rows($rows);
 }
 
 function elpis_planning_line_select_fields(): string
@@ -410,11 +464,65 @@ function elpis_fetch_planning_lines_for_project(string $company, string $project
     return $lines;
 }
 
-function elpis_fetch_planning_lines_by_projects(string $company, array $projectNos, int $ttl = 3600): array
+function elpis_normalize_project_nos(array $projectNos): array
 {
-    $projectNos = array_values(array_unique(array_filter(array_map(static function ($value): string {
+    return array_values(array_unique(array_filter(array_map(static function ($value): string {
         return trim((string) $value);
     }, $projectNos))));
+}
+
+function elpis_planning_lines_chunk_count(array $projectNos): int
+{
+    $projectNos = elpis_normalize_project_nos($projectNos);
+
+    if ($projectNos === []) {
+        return 0;
+    }
+
+    return (int) ceil(count($projectNos) / ELPI_PLANNING_LINES_CHUNK_SIZE);
+}
+
+function elpis_fetch_planning_lines_chunk(string $company, array $projectNos, int $ttl = 3600): array
+{
+    $projectNos = elpis_normalize_project_nos($projectNos);
+    $byProject = [];
+
+    foreach ($projectNos as $projectNo) {
+        $byProject[$projectNo] = [];
+    }
+
+    if ($projectNos === []) {
+        return $byProject;
+    }
+
+    $filters = [];
+    foreach ($projectNos as $projectNo) {
+        $filters[] = "Job_No eq '" . elpis_escape_odata_string($projectNo) . "'";
+    }
+
+    $rows = elpis_try_fetch_rows($company, 'AppProjectInkoopPlanningsRegel', [
+        '$filter' => '(' . implode(' or ', $filters) . ") and Type eq 'Artikel'",
+        '$select' => elpis_planning_line_select_fields(),
+        '$orderby' => 'Job_No asc,Job_Task_No asc,Line_No asc',
+    ], $ttl);
+
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $jobNo = trim((string) ($row['Job_No'] ?? ''));
+        if ($jobNo === '' || !isset($byProject[$jobNo])) {
+            continue;
+        }
+        elpis_collect_planning_line_row($row, $byProject[$jobNo]);
+    }
+
+    return $byProject;
+}
+
+function elpis_fetch_planning_lines_by_projects(string $company, array $projectNos, int $ttl = 3600): array
+{
+    $projectNos = elpis_normalize_project_nos($projectNos);
 
     if ($projectNos === []) {
         return [];
@@ -425,28 +533,13 @@ function elpis_fetch_planning_lines_by_projects(string $company, array $projectN
         $byProject[$projectNo] = [];
     }
 
-    $chunks = array_chunk($projectNos, 12);
+    $chunks = array_chunk($projectNos, ELPI_PLANNING_LINES_CHUNK_SIZE);
     foreach ($chunks as $chunk) {
-        $filters = [];
-        foreach ($chunk as $projectNo) {
-            $filters[] = "Job_No eq '" . elpis_escape_odata_string($projectNo) . "'";
-        }
-
-        $rows = elpis_try_fetch_rows($company, 'AppProjectInkoopPlanningsRegel', [
-            '$filter' => '(' . implode(' or ', $filters) . ") and Type eq 'Artikel'",
-            '$select' => elpis_planning_line_select_fields(),
-            '$orderby' => 'Job_No asc,Job_Task_No asc,Line_No asc',
-        ], $ttl);
-
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
+        $chunkResult = elpis_fetch_planning_lines_chunk($company, $chunk, $ttl);
+        foreach ($chunkResult as $jobNo => $lines) {
+            foreach ($lines as $line) {
+                $byProject[$jobNo][] = $line;
             }
-            $jobNo = trim((string) ($row['Job_No'] ?? ''));
-            if ($jobNo === '' || !isset($byProject[$jobNo])) {
-                continue;
-            }
-            elpis_collect_planning_line_row($row, $byProject[$jobNo]);
         }
     }
 

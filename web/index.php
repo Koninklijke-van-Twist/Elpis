@@ -236,7 +236,7 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
     <title><?= elpis_h(LOC('app.title')) ?></title>
     <link rel="stylesheet" href="brand.css">
     <link rel="manifest" href="site.webmanifest">
-    <link rel="icon" href="favicon.ico" sizes="any">
+    <link rel="icon" href="box.svg" type="image/svg+xml">
     <?php renderLanguageSwitcherStyles(); ?>
     <style>
         .elpis-page { max-width: 1280px; margin: 0 auto; padding: 20px 20px 32px; }
@@ -457,9 +457,45 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
             border-radius: 50%;
             animation: elpis-loader-spin 0.8s linear infinite;
         }
+        .elpis-loader-steps {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+            align-content: center;
+            width: 100%;
+            max-width: 220px;
+            min-height: 20px;
+            margin-inline: auto;
+        }
+        .elpis-load-step {
+            width: 20px;
+            height: 20px;
+            line-height: 0;
+        }
+        .elpis-load-step img {
+            width: 20px;
+            height: 20px;
+            display: block;
+            opacity: 0.2;
+            filter: grayscale(1) brightness(1.35);
+            transform-origin: center bottom;
+            transition: opacity 0.2s ease, filter 0.2s ease;
+        }
+        .elpis-load-step.is-done img {
+            opacity: 1;
+            filter: none;
+            animation: elpis-box-pop 0.38s cubic-bezier(0.34, 1.45, 0.64, 1) forwards;
+        }
         .elpis-loader-title { margin: 0; font-family: var(--kvt-font-display); font-size: 1.1rem; }
         .elpis-loader-text { margin: 0; color: var(--kvt-muted); font-size: 0.92rem; }
         @keyframes elpis-loader-spin { to { transform: rotate(360deg); } }
+        @keyframes elpis-box-pop {
+            0% { transform: translateY(0) scale(0.92); }
+            40% { transform: translateY(-5px) scale(1.18); }
+            70% { transform: translateY(1px) scale(0.97); }
+            100% { transform: translateY(0) scale(1); }
+        }
     </style>
 </head>
 <body>
@@ -489,8 +525,9 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
                     <?php if ($projectManagers === []): ?>
                         <option value=""><?= elpis_h(LOC('elpis.empty.managers')) ?></option>
                     <?php else: ?>
+                        <option value="<?= elpis_h(ELPI_MANAGER_ALL) ?>"<?= elpis_is_all_managers_selection($projectManager) ? ' selected' : '' ?>><?= elpis_h(LOC('elpis.manager.all')) ?></option>
                         <?php foreach ($projectManagers as $managerOption): ?>
-                            <option value="<?= elpis_h($managerOption) ?>"<?= strcasecmp($managerOption, $projectManager) === 0 ? ' selected' : '' ?>><?= elpis_h($managerOption) ?></option>
+                            <option value="<?= elpis_h($managerOption) ?>"<?= !elpis_is_all_managers_selection($projectManager) && strcasecmp($managerOption, $projectManager) === 0 ? ' selected' : '' ?>><?= elpis_h(elpis_format_manager_label($managerOption)) ?></option>
                         <?php endforeach; ?>
                     <?php endif; ?>
                 </select>
@@ -505,7 +542,7 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
     <?php if ($projectManager !== ''): ?>
         <section class="elpis-card">
             <h2><?= elpis_h(LOC('elpis.section.projects')) ?></h2>
-            <p class="elpis-muted"><?= elpis_h(LOC('elpis.meta.manager')) ?>: <?= elpis_h($projectManager) ?></p>
+            <p class="elpis-muted"><?= elpis_h(LOC('elpis.meta.manager')) ?>: <?= elpis_h(elpis_is_all_managers_selection($projectManager) ? LOC('elpis.manager.all') : elpis_format_manager_label($projectManager)) ?></p>
 
             <?php if ($projects === []): ?>
                 <p class="elpis-muted"><?= elpis_h(LOC('elpis.empty.projects')) ?></p>
@@ -642,9 +679,13 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
     ]) ?>
 </div>
 
+<div id="elpis-loader-meta" hidden
+     data-project-count="<?= (int) count($projects) ?>"
+     data-chunk-size="<?= (int) ELPI_PLANNING_LINES_CHUNK_SIZE ?>"></div>
 <div id="elpis-loader" class="elpis-loader" aria-hidden="true" aria-live="polite" aria-busy="false">
     <div class="elpis-loader-panel">
         <div class="elpis-loader-spinner" aria-hidden="true"></div>
+        <div id="elpis-loader-steps" class="elpis-loader-steps" aria-hidden="true"></div>
         <p class="elpis-loader-title"><?= elpis_h(LOC('elpis.loader.wait')) ?></p>
         <p class="elpis-loader-text"><?= elpis_h(LOC('elpis.loader.loading')) ?></p>
     </div>
@@ -654,6 +695,7 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
 (function () {
     var DELAY_MS = 500;
     var loader = document.getElementById('elpis-loader');
+    var stepsGrid = document.getElementById('elpis-loader-steps');
     if (!loader) {
         return;
     }
@@ -664,6 +706,26 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
         loader.classList.add('is-visible');
         loader.setAttribute('aria-hidden', 'false');
         loader.setAttribute('aria-busy', 'true');
+        if (stepsGrid) {
+            stepsGrid.setAttribute('aria-hidden', 'false');
+        }
+    }
+
+    function hideLoader() {
+        loader.classList.remove('is-visible');
+        loader.setAttribute('aria-hidden', 'true');
+        loader.setAttribute('aria-busy', 'false');
+        if (stepsGrid) {
+            stepsGrid.setAttribute('aria-hidden', 'true');
+            stepsGrid.innerHTML = '';
+        }
+    }
+
+    function clearLoaderTimer() {
+        if (timer !== null) {
+            window.clearTimeout(timer);
+            timer = null;
+        }
     }
 
     function scheduleLoader() {
@@ -676,20 +738,253 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
         }, DELAY_MS);
     }
 
+    function addStepSlot(stepId) {
+        if (!stepsGrid || stepsGrid.querySelector('[data-step-id="' + stepId + '"]')) {
+            return;
+        }
+
+        var slot = document.createElement('div');
+        slot.className = 'elpis-load-step';
+        slot.setAttribute('data-step-id', stepId);
+        slot.innerHTML = '<img src="box.svg" width="20" height="20" alt="">';
+        stepsGrid.appendChild(slot);
+    }
+
+    function resetStepsGrid(stepIds) {
+        if (!stepsGrid) {
+            return;
+        }
+
+        stepsGrid.innerHTML = '';
+        stepIds.forEach(function (stepId) {
+            addStepSlot(stepId);
+        });
+    }
+
+    function markStepDone(stepId) {
+        if (!stepsGrid) {
+            return;
+        }
+
+        var slot = stepsGrid.querySelector('[data-step-id="' + stepId + '"]');
+        if (slot) {
+            slot.classList.add('is-done');
+        }
+    }
+
+    function ensureLineChunkSlots(chunkCount) {
+        for (var index = 0; index < chunkCount; index += 1) {
+            addStepSlot('lines_' + index);
+        }
+    }
+
+    function sameDataFilters(targetUrl, currentUrl) {
+        return targetUrl.searchParams.get('company') === currentUrl.searchParams.get('company')
+            && targetUrl.searchParams.get('manager') === currentUrl.searchParams.get('manager')
+            && !targetUrl.searchParams.has('reload_managers');
+    }
+
+    function isProjectOnlyNavigation(targetUrl) {
+        var currentUrl = new URL(window.location.href);
+
+        if (!sameDataFilters(targetUrl, currentUrl)) {
+            return false;
+        }
+
+        if ((targetUrl.searchParams.get('q') || '') !== (currentUrl.searchParams.get('q') || '')) {
+            return false;
+        }
+
+        return (targetUrl.searchParams.get('project') || '') !== (currentUrl.searchParams.get('project') || '');
+    }
+
+    function estimateLineChunkCount(url) {
+        if (url.searchParams.has('reload_managers')) {
+            return 0;
+        }
+
+        if (!(url.searchParams.get('manager') || '')) {
+            return 0;
+        }
+
+        var currentUrl = new URL(window.location.href);
+        if (!sameDataFilters(url, currentUrl)) {
+            return 0;
+        }
+
+        var meta = document.getElementById('elpis-loader-meta');
+        var chunkSize = meta ? parseInt(meta.getAttribute('data-chunk-size') || '12', 10) : 12;
+        var projectCount = meta ? parseInt(meta.getAttribute('data-project-count') || '0', 10) : 0;
+
+        if (projectCount > 0) {
+            return Math.ceil(projectCount / chunkSize);
+        }
+
+        var projectItems = document.querySelectorAll('[data-elpis-project-item]');
+        if (projectItems.length === 0) {
+            return 0;
+        }
+
+        return Math.ceil(projectItems.length / chunkSize);
+    }
+
+    function urlFromForm(form) {
+        var url = new URL(form.getAttribute('action') || window.location.pathname, window.location.href);
+        var formData = new FormData(form);
+
+        formData.forEach(function (value, key) {
+            if (String(value) !== '') {
+                url.searchParams.set(key, String(value));
+            } else {
+                url.searchParams.delete(key);
+            }
+        });
+
+        var currentLang = new URL(window.location.href).searchParams.get('lang');
+        if (currentLang) {
+            url.searchParams.set('lang', currentLang);
+        }
+
+        return url;
+    }
+
+    function buildStepIds(url) {
+        if (isProjectOnlyNavigation(url)) {
+            var lineChunkCount = estimateLineChunkCount(url);
+            var lineStepIds = [];
+            for (var index = 0; index < lineChunkCount; index += 1) {
+                lineStepIds.push('lines_' + index);
+            }
+            return lineStepIds;
+        }
+
+        var stepIds = ['managers'];
+
+        if (!url.searchParams.has('reload_managers')) {
+            stepIds.push('projects');
+
+            var chunkCount = estimateLineChunkCount(url);
+            for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+                stepIds.push('lines_' + chunkIndex);
+            }
+        }
+
+        return stepIds;
+    }
+
+    function navigateTo(url) {
+        window.location.href = url.pathname + url.search;
+    }
+
+    function handleProgressEvent(eventData) {
+        if (eventData.error) {
+            throw new Error('progress failed');
+        }
+
+        if (typeof eventData.lineChunks === 'number' && eventData.lineChunks > 0) {
+            ensureLineChunkSlots(eventData.lineChunks);
+        }
+
+        if (eventData.status === 'done' && eventData.step) {
+            markStepDone(eventData.step);
+        }
+    }
+
+    function runProgressAndNavigate(url) {
+        clearLoaderTimer();
+        showLoader();
+        resetStepsGrid(buildStepIds(url));
+
+        var progressUrl = new URL('elpis_progress.php', window.location.href);
+        var navigationStarted = false;
+
+        url.searchParams.forEach(function (value, key) {
+            progressUrl.searchParams.set(key, value);
+        });
+
+        function finishNavigation() {
+            if (navigationStarted) {
+                return;
+            }
+            navigationStarted = true;
+            sessionStorage.setItem('elpis_skip_loader', '1');
+            navigateTo(url);
+        }
+
+        fetch(progressUrl.toString()).then(function (response) {
+            if (!response.ok || !response.body) {
+                throw new Error('progress failed');
+            }
+
+            var reader = response.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = '';
+            var streamComplete = false;
+
+            function readChunk() {
+                return reader.read().then(function (result) {
+                    if (result.done) {
+                        if (!streamComplete) {
+                            finishNavigation();
+                        }
+                        return;
+                    }
+
+                    buffer += decoder.decode(result.value, { stream: true });
+                    var parts = buffer.split('\n');
+                    buffer = parts.pop() || '';
+
+                    parts.forEach(function (line) {
+                        var trimmed = line.trim();
+                        if (trimmed === '') {
+                            return;
+                        }
+
+                        var eventData = JSON.parse(trimmed);
+                        handleProgressEvent(eventData);
+
+                        if (eventData.complete) {
+                            streamComplete = true;
+                            finishNavigation();
+                        }
+                    });
+
+                    return readChunk();
+                });
+            }
+
+            return readChunk();
+        }).catch(function () {
+            finishNavigation();
+        });
+    }
+
+    function shouldInterceptNavigation(event) {
+        return !(event.defaultPrevented
+            || event.button !== 0
+            || event.metaKey
+            || event.ctrlKey
+            || event.shiftKey
+            || event.altKey);
+    }
+
     document.addEventListener('click', function (event) {
         var trigger = event.target.closest('.elpis-nav[href], .lang-switcher-item a');
-        if (!trigger) {
+        if (!trigger || !shouldInterceptNavigation(event)) {
             return;
         }
         if (trigger.tagName === 'A' && trigger.target === '_blank') {
             return;
         }
-        scheduleLoader();
+
+        event.preventDefault();
+        runProgressAndNavigate(new URL(trigger.href, window.location.href));
     }, true);
 
     document.querySelectorAll('form.elpis-nav').forEach(function (form) {
-        form.addEventListener('submit', function () {
-            scheduleLoader();
+        form.addEventListener('submit', function (event) {
+            event.preventDefault();
+            runProgressAndNavigate(urlFromForm(form));
         });
     });
 
@@ -724,8 +1019,7 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
 
     function submitFilterForm() {
         syncQueryToFilterForm();
-        scheduleLoader();
-        filterForm.submit();
+        runProgressAndNavigate(urlFromForm(filterForm));
     }
 
     if (companySelect && filterForm) {
@@ -749,6 +1043,11 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
 
             submitFilterForm();
         });
+    }
+
+    if (sessionStorage.getItem('elpis_skip_loader')) {
+        sessionStorage.removeItem('elpis_skip_loader');
+        hideLoader();
     }
 })();
 
