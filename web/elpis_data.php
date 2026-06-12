@@ -176,6 +176,53 @@ function elpis_pick_manager_from_list(array $managers, string $preferred): strin
     return '';
 }
 
+function elpis_user_has_saved_selection_prefs(string $email, string $savedCompany, array $savedManagersByCompany): bool
+{
+    if (trim($savedCompany) !== '') {
+        return true;
+    }
+
+    return $savedManagersByCompany !== [];
+}
+
+function elpis_discover_selection_for_new_user(
+    array $companies,
+    string $email,
+    string $requestedCompany,
+    string $requestedManager,
+    string $savedCompany,
+    array $savedManagersByCompany,
+    int $ttl = ELPI_PROJECT_MANAGERS_TTL
+): ?array {
+    if ($requestedCompany !== '' || $requestedManager !== '') {
+        return null;
+    }
+
+    if (elpis_user_has_saved_selection_prefs($email, $savedCompany, $savedManagersByCompany)) {
+        return null;
+    }
+
+    $bcUser = elpis_resolve_project_manager_from_email($email);
+    if ($bcUser === null || $bcUser === '') {
+        return null;
+    }
+
+    foreach ($companies as $company) {
+        $managers = elpis_fetch_project_managers($company, $ttl);
+        $match = elpis_pick_manager_from_list($managers, $bcUser);
+        if ($match === '') {
+            continue;
+        }
+
+        return [
+            'company' => $company,
+            'manager' => $match,
+        ];
+    }
+
+    return null;
+}
+
 function elpis_resolve_manager_choice(
     array $managers,
     ?string $requested,
@@ -252,6 +299,7 @@ function elpis_normalize_planning_line_row(array $row): array
     $qtyToOrder = $hasPurchaseOrder ? 0.0 : max($outstanding, $quantity);
     $qtyOrdered = $hasPurchaseOrder ? $orderedQty : 0.0;
     $qtyReceived = $hasPurchaseOrder ? max(0.0, $orderedQty - $outstanding) : 0.0;
+    $qtyOpen = max(0.0, $qtyOrdered - $qtyReceived);
 
     return [
         'job_task_no' => trim((string) ($row['Job_Task_No'] ?? '')),
@@ -259,6 +307,7 @@ function elpis_normalize_planning_line_row(array $row): array
         'description' => trim((string) ($row['Description'] ?? '')),
         'qty_to_order' => $qtyToOrder,
         'qty_ordered' => $qtyOrdered,
+        'qty_open' => $qtyOpen,
         'qty_received' => $qtyReceived,
         'purchase_order_no' => $purchaseOrderNo,
         'completely_received' => (bool) ($row['LVS_Completely_Received'] ?? false),
@@ -321,6 +370,23 @@ function elpis_fetch_projects_for_manager(string $company, string $projectManage
     return $projects;
 }
 
+function elpis_planning_line_select_fields(): string
+{
+    return 'Job_No,Job_Task_No,Line_No,Type,No,Description,Quantity,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Purchase_Order_No,LVS_Completely_Received';
+}
+
+function elpis_collect_planning_line_row(array $row, array &$lines): void
+{
+    if (!is_array($row)) {
+        return;
+    }
+
+    $normalized = elpis_normalize_planning_line_row($row);
+    if ($normalized['item_no'] !== '' || $normalized['description'] !== '') {
+        $lines[] = $normalized;
+    }
+}
+
 function elpis_fetch_planning_lines_for_project(string $company, string $projectNo, int $ttl = 3600): array
 {
     $projectNo = trim($projectNo);
@@ -331,21 +397,88 @@ function elpis_fetch_planning_lines_for_project(string $company, string $project
     $escaped = elpis_escape_odata_string($projectNo);
     $rows = elpis_try_fetch_rows($company, 'AppProjectInkoopPlanningsRegel', [
         '$filter' => "Job_No eq '" . $escaped . "' and Type eq 'Artikel'",
-        '$select' => 'Job_No,Job_Task_No,Line_No,Type,No,Description,Quantity,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Purchase_Order_No,LVS_Completely_Received',
+        '$select' => elpis_planning_line_select_fields(),
         '$orderby' => 'Job_Task_No asc,Line_No asc',
         '$top' => '500',
     ], $ttl);
 
     $lines = [];
     foreach ($rows as $row) {
-        if (!is_array($row)) {
-            continue;
-        }
-        $normalized = elpis_normalize_planning_line_row($row);
-        if ($normalized['item_no'] !== '' || $normalized['description'] !== '') {
-            $lines[] = $normalized;
-        }
+        elpis_collect_planning_line_row($row, $lines);
     }
 
     return $lines;
+}
+
+function elpis_fetch_planning_lines_by_projects(string $company, array $projectNos, int $ttl = 3600): array
+{
+    $projectNos = array_values(array_unique(array_filter(array_map(static function ($value): string {
+        return trim((string) $value);
+    }, $projectNos))));
+
+    if ($projectNos === []) {
+        return [];
+    }
+
+    $byProject = [];
+    foreach ($projectNos as $projectNo) {
+        $byProject[$projectNo] = [];
+    }
+
+    $chunks = array_chunk($projectNos, 12);
+    foreach ($chunks as $chunk) {
+        $filters = [];
+        foreach ($chunk as $projectNo) {
+            $filters[] = "Job_No eq '" . elpis_escape_odata_string($projectNo) . "'";
+        }
+
+        $rows = elpis_try_fetch_rows($company, 'AppProjectInkoopPlanningsRegel', [
+            '$filter' => '(' . implode(' or ', $filters) . ") and Type eq 'Artikel'",
+            '$select' => elpis_planning_line_select_fields(),
+            '$orderby' => 'Job_No asc,Job_Task_No asc,Line_No asc',
+        ], $ttl);
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $jobNo = trim((string) ($row['Job_No'] ?? ''));
+            if ($jobNo === '' || !isset($byProject[$jobNo])) {
+                continue;
+            }
+            elpis_collect_planning_line_row($row, $byProject[$jobNo]);
+        }
+    }
+
+    return $byProject;
+}
+
+function elpis_line_search_blob(array $line): string
+{
+    return strtolower(implode(' ', array_filter([
+        (string) ($line['job_task_no'] ?? ''),
+        (string) ($line['item_no'] ?? ''),
+        (string) ($line['description'] ?? ''),
+    ], static function (string $value): bool {
+        return trim($value) !== '';
+    })));
+}
+
+function elpis_project_search_blob(array $project, array $lines): string
+{
+    $parts = [
+        strtolower(trim((string) ($project['no'] ?? ''))),
+        strtolower(trim((string) ($project['description'] ?? ''))),
+    ];
+
+    foreach ($lines as $line) {
+        if (!is_array($line)) {
+            continue;
+        }
+        $parts[] = elpis_line_search_blob($line);
+    }
+
+    return trim(implode(' ', array_filter($parts, static function (string $value): bool {
+        return $value !== '';
+    })));
 }
