@@ -1,0 +1,351 @@
+<?php
+
+/**
+ * Includes/requires
+ */
+require_once __DIR__ . '/auth_helper.php';
+require_once __DIR__ . '/odata.php';
+
+/**
+ * Constants
+ */
+
+const ELPI_PROJECT_MANAGER_EMAIL_MAP = [
+    'mhubregtse@ameil.nl' => 'KVT\\mhubregtse',
+];
+
+const ELPI_DEFAULT_USER_EMAIL = 'localtester@kvt.nl';
+
+const ELPI_PROJECT_MANAGERS_TTL = 86400;
+
+/**
+ * Functies
+ */
+
+function elpis_escape_odata_string(string $value): string
+{
+    return str_replace("'", "''", trim($value));
+}
+
+function elpis_company_entity_url(string $baseUrl, string $environment, string $company, string $entitySet, array $query): string
+{
+    $safeCompany = elpis_escape_odata_string($company);
+    $companySegment = "Company('" . rawurlencode($safeCompany) . "')";
+    $url = rtrim($baseUrl, '/') . '/' . rawurlencode($environment) . '/ODataV4/' . $companySegment . '/' . rawurlencode($entitySet);
+
+    if ($query !== []) {
+        $url .= '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+    }
+
+    return $url;
+}
+
+function elpis_fetch_rows(string $company, string $entitySet, array $query, int $ttl = 3600): array
+{
+    global $baseUrl;
+
+    $environment = auth_get_environment_for_company($company, $ttl);
+    $auth = auth_get_auth_for_environment($environment);
+    $url = elpis_company_entity_url($baseUrl, $environment, $company, $entitySet, $query);
+
+    return odata_get_all($url, $auth, $ttl);
+}
+
+function elpis_try_fetch_rows(string $company, string $entitySet, array $query, int $ttl = 3600): array
+{
+    try {
+        return elpis_fetch_rows($company, $entitySet, $query, $ttl);
+    } catch (Throwable $error) {
+        return [];
+    }
+}
+
+function elpis_default_companies(): array
+{
+    return [
+        'Koninklijke van Twist',
+        'Hunter van Twist',
+        'KVT Gas',
+    ];
+}
+
+function elpis_companies_for_page(int $ttl = 3600): array
+{
+    try {
+        $result = auth_discover_companies_across_active_environments($ttl);
+        $companies = is_array($result['companies'] ?? null) ? $result['companies'] : [];
+        if ($companies !== []) {
+            return $companies;
+        }
+    } catch (Throwable $ignored) {
+    }
+
+    return elpis_default_companies();
+}
+
+function elpis_normalize_bc_username(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    if (str_contains($value, '\\')) {
+        [$domain, $user] = explode('\\', $value, 2);
+        return strtoupper(trim($domain)) . '\\' . strtoupper(trim($user));
+    }
+
+    return 'KVT\\' . strtoupper($value);
+}
+
+function elpis_current_user_email(): string
+{
+    $email = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
+
+    return $email !== '' ? $email : ELPI_DEFAULT_USER_EMAIL;
+}
+
+function elpis_load_manager_prefs(string $email): array
+{
+    if (!function_exists('loadUserPrefs')) {
+        return [];
+    }
+
+    $prefs = loadUserPrefs($email);
+    $raw = $prefs['elpis_managers_by_company'] ?? '{}';
+    $decoded = json_decode((string) $raw, true);
+
+    return is_array($decoded) ? $decoded : [];
+}
+
+function elpis_save_dropdown_prefs(string $email, string $company, string $manager): void
+{
+    if (!function_exists('saveUserPref')) {
+        return;
+    }
+
+    $managersByCompany = elpis_load_manager_prefs($email);
+    if ($manager !== '') {
+        $managersByCompany[$company] = $manager;
+    }
+
+    saveUserPref($email, 'elpis_company', $company);
+    saveUserPref(
+        $email,
+        'elpis_managers_by_company',
+        json_encode($managersByCompany, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+    );
+}
+
+function elpis_resolve_company_choice(array $companies, ?string $requested, ?string $saved): string
+{
+    if ($companies === []) {
+        return '';
+    }
+
+    $requested = trim((string) $requested);
+    if ($requested !== '' && in_array($requested, $companies, true)) {
+        return $requested;
+    }
+
+    $saved = trim((string) $saved);
+    if ($saved !== '' && in_array($saved, $companies, true)) {
+        return $saved;
+    }
+
+    return (string) $companies[0];
+}
+
+function elpis_pick_manager_from_list(array $managers, string $preferred): string
+{
+    $preferred = elpis_normalize_bc_username($preferred);
+    if ($preferred === '') {
+        return '';
+    }
+
+    if (in_array($preferred, $managers, true)) {
+        return $preferred;
+    }
+
+    foreach ($managers as $candidate) {
+        if (strcasecmp($candidate, $preferred) === 0) {
+            return $candidate;
+        }
+    }
+
+    return '';
+}
+
+function elpis_resolve_manager_choice(
+    array $managers,
+    ?string $requested,
+    string $company,
+    array $savedManagersByCompany,
+    ?string $email
+): string {
+    if ($managers === []) {
+        return '';
+    }
+
+    $fromRequest = elpis_pick_manager_from_list($managers, (string) $requested);
+    if ($fromRequest !== '') {
+        return $fromRequest;
+    }
+
+    $savedForCompany = trim((string) ($savedManagersByCompany[$company] ?? ''));
+    $fromSaved = elpis_pick_manager_from_list($managers, $savedForCompany);
+    if ($fromSaved !== '') {
+        return $fromSaved;
+    }
+
+    $fromEmail = elpis_resolve_project_manager_from_email($email);
+    if ($fromEmail !== null) {
+        $fromEmailMatch = elpis_pick_manager_from_list($managers, $fromEmail);
+        if ($fromEmailMatch !== '') {
+            return $fromEmailMatch;
+        }
+    }
+
+    return (string) $managers[0];
+}
+
+function elpis_resolve_project_manager_from_email(?string $email): ?string
+{
+    $email = strtolower(trim((string) $email));
+    if ($email === '') {
+        return null;
+    }
+
+    if (isset(ELPI_PROJECT_MANAGER_EMAIL_MAP[$email])) {
+        return elpis_normalize_bc_username(ELPI_PROJECT_MANAGER_EMAIL_MAP[$email]);
+    }
+
+    $localPart = strstr($email, '@', true);
+    if (!is_string($localPart) || trim($localPart) === '') {
+        return null;
+    }
+
+    return elpis_normalize_bc_username($localPart);
+}
+
+function elpis_normalize_project_row(array $row): array
+{
+    return [
+        'no' => trim((string) ($row['No'] ?? '')),
+        'description' => trim((string) ($row['Description'] ?? '')),
+        'status' => trim((string) ($row['Status'] ?? '')),
+        'project_manager' => elpis_normalize_bc_username((string) ($row['Project_Manager'] ?? '')),
+    ];
+}
+
+function elpis_normalize_planning_line_row(array $row): array
+{
+    $purchaseOrderNo = trim((string) ($row['LVS_Purchase_Order_No'] ?? ''));
+    $quantity = (float) ($row['Quantity'] ?? 0);
+    $outstanding = (float) ($row['LVS_Outstanding_Qty_Base'] ?? 0);
+    $orderedQty = (float) ($row['LVS_Quantity_Order_UoM'] ?? 0);
+    if ($orderedQty <= 0 && $purchaseOrderNo !== '') {
+        $orderedQty = $quantity;
+    }
+
+    $hasPurchaseOrder = $purchaseOrderNo !== '';
+    $qtyToOrder = $hasPurchaseOrder ? 0.0 : max($outstanding, $quantity);
+    $qtyOrdered = $hasPurchaseOrder ? $orderedQty : 0.0;
+    $qtyReceived = $hasPurchaseOrder ? max(0.0, $orderedQty - $outstanding) : 0.0;
+
+    return [
+        'job_task_no' => trim((string) ($row['Job_Task_No'] ?? '')),
+        'item_no' => trim((string) ($row['No'] ?? '')),
+        'description' => trim((string) ($row['Description'] ?? '')),
+        'qty_to_order' => $qtyToOrder,
+        'qty_ordered' => $qtyOrdered,
+        'qty_received' => $qtyReceived,
+        'purchase_order_no' => $purchaseOrderNo,
+        'completely_received' => (bool) ($row['LVS_Completely_Received'] ?? false),
+        'line_no' => (int) ($row['Line_No'] ?? 0),
+    ];
+}
+
+function elpis_fetch_project_managers(string $company, int $ttl = ELPI_PROJECT_MANAGERS_TTL): array
+{
+    $rows = elpis_try_fetch_rows($company, 'AppProjecten', [
+        '$select' => 'Project_Manager',
+        '$filter' => "Project_Manager ne ''",
+        '$top' => '500',
+    ], $ttl);
+
+    $managers = [];
+    $seen = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $manager = elpis_normalize_bc_username((string) ($row['Project_Manager'] ?? ''));
+        if ($manager === '' || isset($seen[$manager])) {
+            continue;
+        }
+        $seen[$manager] = true;
+        $managers[] = $manager;
+    }
+
+    natcasesort($managers);
+    return array_values($managers);
+}
+
+function elpis_fetch_projects_for_manager(string $company, string $projectManager, int $ttl = 3600): array
+{
+    $manager = elpis_normalize_bc_username($projectManager);
+    if ($manager === '') {
+        return [];
+    }
+
+    $escaped = elpis_escape_odata_string($manager);
+    $rows = elpis_try_fetch_rows($company, 'AppProjecten', [
+        '$select' => 'No,Description,Status,Project_Manager',
+        '$filter' => "Project_Manager eq '" . $escaped . "'",
+        '$orderby' => 'No desc',
+        '$top' => '200',
+    ], $ttl);
+
+    $projects = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $normalized = elpis_normalize_project_row($row);
+        if ($normalized['no'] !== '') {
+            $projects[] = $normalized;
+        }
+    }
+
+    return $projects;
+}
+
+function elpis_fetch_planning_lines_for_project(string $company, string $projectNo, int $ttl = 3600): array
+{
+    $projectNo = trim($projectNo);
+    if ($projectNo === '') {
+        return [];
+    }
+
+    $escaped = elpis_escape_odata_string($projectNo);
+    $rows = elpis_try_fetch_rows($company, 'AppProjectInkoopPlanningsRegel', [
+        '$filter' => "Job_No eq '" . $escaped . "' and Type eq 'Artikel'",
+        '$select' => 'Job_No,Job_Task_No,Line_No,Type,No,Description,Quantity,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Purchase_Order_No,LVS_Completely_Received',
+        '$orderby' => 'Job_Task_No asc,Line_No asc',
+        '$top' => '500',
+    ], $ttl);
+
+    $lines = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $normalized = elpis_normalize_planning_line_row($row);
+        if ($normalized['item_no'] !== '' || $normalized['description'] !== '') {
+            $lines[] = $normalized;
+        }
+    }
+
+    return $lines;
+}
