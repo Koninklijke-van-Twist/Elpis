@@ -370,6 +370,14 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
         .elpis-search-empty { display: none; margin-top: 8px; }
         .elpis-search-empty.is-visible { display: block; }
         .elpis-project-item.is-filtered-out { display: none; }
+        .elpis-project-separator {
+            list-style: none;
+            margin: 4px 0 14px;
+            padding: 0;
+            border: 0;
+            border-top: 2px solid rgba(0, 82, 155, 0.18);
+            box-shadow: 0 1px 0 rgba(0, 153, 204, 0.12);
+        }
         table.elpis-table tbody tr.is-filtered-out { display: none; }
         table.elpis-table thead th {
             background: linear-gradient(180deg, var(--kvt-perkins-blue) 0%, #0069b4 100%);
@@ -615,6 +623,9 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
                                 </div>
                             <?php endif; ?>
                         </li>
+                        <?php if ($isOpen && count($projects) > 1): ?>
+                            <li class="elpis-project-separator" aria-hidden="true" role="presentation"></li>
+                        <?php endif; ?>
                     <?php endforeach; ?>
                 </ul>
             <?php endif; ?>
