@@ -82,26 +82,42 @@ function elpis_matches_search_tokens(string $haystack, array $tokens): bool
     return true;
 }
 
-function elpis_sort_projects_open_first(array $projects, string $openProjectNo): array
+function elpis_sort_projects_for_display(array $projects, string $openProjectNo, array $linesByProject): array
 {
-    if ($openProjectNo === '' || $projects === []) {
-        return $projects;
+    if ($projects === []) {
+        return [];
     }
 
-    $openProjects = [];
-    $otherProjects = [];
-    foreach ($projects as $project) {
+    $indexed = [];
+    foreach ($projects as $index => $project) {
         if (!is_array($project)) {
             continue;
         }
-        if ((string) ($project['no'] ?? '') === $openProjectNo) {
-            $openProjects[] = $project;
-            continue;
-        }
-        $otherProjects[] = $project;
+
+        $projectNo = (string) ($project['no'] ?? '');
+        $indexed[] = [
+            'project' => $project,
+            'index' => $index,
+            'has_lines' => $projectNo !== '' && ($linesByProject[$projectNo] ?? []) !== [],
+            'is_open' => $openProjectNo !== '' && $projectNo === $openProjectNo,
+        ];
     }
 
-    return array_merge($openProjects, $otherProjects);
+    usort($indexed, static function (array $left, array $right): int {
+        if ($left['is_open'] !== $right['is_open']) {
+            return $left['is_open'] ? -1 : 1;
+        }
+
+        if ($left['has_lines'] !== $right['has_lines']) {
+            return $left['has_lines'] ? -1 : 1;
+        }
+
+        return $left['index'] <=> $right['index'];
+    });
+
+    return array_map(static function (array $row): array {
+        return $row['project'];
+    }, $indexed);
 }
 
 function elpis_line_row_class(float $toOrder, float $ordered, float $received, float $open): string
@@ -222,7 +238,7 @@ try {
     $errorKey = 'elpis.error.load_failed';
 }
 
-$projects = elpis_sort_projects_open_first($projects, $openProjectNo);
+$projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByProject);
 
 ?><!DOCTYPE html>
 <html lang="<?= elpis_h(getHtmlLang()) ?>">
@@ -336,6 +352,21 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
         .elpis-project-title { font-weight: 700; color: var(--kvt-perkins-blue); }
         .elpis-project-chevron { color: var(--kvt-main-blue); font-size: 1.2rem; transition: transform 0.2s ease; }
         .elpis-project-item.is-open .elpis-project-chevron { transform: rotate(90deg); }
+        .elpis-project-item--empty:not(.is-open) {
+            background: #f3f3f3;
+            border-color: #e3e3e3;
+            box-shadow: none;
+        }
+        .elpis-project-item--empty:not(.is-open) .elpis-project-toggle {
+            background: #f3f3f3;
+            color: var(--kvt-muted);
+        }
+        .elpis-project-item--empty:not(.is-open) .elpis-project-toggle:hover { background: #ececec; }
+        .elpis-project-item--empty:not(.is-open) .elpis-project-title {
+            color: #8a8a8a;
+            font-weight: 600;
+        }
+        .elpis-project-item--empty:not(.is-open) .elpis-project-chevron { color: #9a9a9a; }
         .elpis-project-panel { display: none; border-top: 1px solid var(--kvt-line); padding: 14px 16px 16px; background: #fbfdff; }
         .elpis-project-item.is-open .elpis-project-panel { display: block; }
         .elpis-table-wrap {
@@ -569,12 +600,14 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
                         $searchBlob = elpis_project_search_blob($project, $projectLines);
                         $projectMatchesSearch = elpis_matches_search_tokens($searchBlob, $projectSearchTokens);
                         $isOpen = $projectNo !== '' && $projectNo === $openProjectNo;
+                        $hasLines = $projectLines !== [];
                         ?>
                         <li
-                            class="elpis-project-item<?= $isOpen ? ' is-open' : '' ?><?= !$projectMatchesSearch ? ' is-filtered-out' : '' ?>"
+                            class="elpis-project-item<?= $isOpen ? ' is-open' : '' ?><?= !$hasLines ? ' elpis-project-item--empty' : '' ?><?= !$projectMatchesSearch ? ' is-filtered-out' : '' ?>"
                             data-elpis-project-item
                             data-project-no="<?= elpis_h($projectNo) ?>"
                             data-project-index="<?= (int) $projectIndex ?>"
+                            data-has-lines="<?= $hasLines ? '1' : '0' ?>"
                             data-search-text="<?= elpis_h($searchBlob) ?>"
                         >
                             <button type="button" class="elpis-project-toggle" data-elpis-project-toggle aria-expanded="<?= $isOpen ? 'true' : 'false' ?>">
@@ -1182,21 +1215,53 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
         }
     }
 
-    function restoreProjectListOrder() {
+    function compareProjectItems(left, right) {
+        var leftHasLines = left.getAttribute('data-has-lines') === '1';
+        var rightHasLines = right.getAttribute('data-has-lines') === '1';
+        if (leftHasLines !== rightHasLines) {
+            return leftHasLines ? -1 : 1;
+        }
+
+        return parseInt(left.getAttribute('data-project-index') || '0', 10)
+            - parseInt(right.getAttribute('data-project-index') || '0', 10);
+    }
+
+    function reorderProjectList(openItem) {
         var list = document.getElementById('elpis-project-list');
         if (!list) {
             return;
         }
 
-        var items = Array.prototype.slice.call(list.querySelectorAll('[data-elpis-project-item]'));
-        items.sort(function (left, right) {
-            return parseInt(left.getAttribute('data-project-index') || '0', 10)
-                - parseInt(right.getAttribute('data-project-index') || '0', 10);
-        });
+        removeProjectSeparator();
 
-        items.forEach(function (item) {
-            list.appendChild(item);
+        var items = Array.prototype.slice.call(list.querySelectorAll('[data-elpis-project-item]'));
+        var others = openItem
+            ? items.filter(function (item) {
+                return item !== openItem;
+            })
+            : items.slice();
+        others.sort(compareProjectItems);
+
+        var sequence = [];
+        if (openItem) {
+            sequence.push(openItem);
+            if (items.length > 1) {
+                var separator = document.createElement('li');
+                separator.className = 'elpis-project-separator';
+                separator.setAttribute('aria-hidden', 'true');
+                separator.setAttribute('role', 'presentation');
+                sequence.push(separator);
+            }
+        }
+
+        sequence = sequence.concat(others);
+        sequence.forEach(function (node) {
+            list.appendChild(node);
         });
+    }
+
+    function restoreProjectListOrder() {
+        reorderProjectList(null);
     }
 
     function applyOpenProject(projectNo, options) {
@@ -1208,8 +1273,6 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
 
         var items = list.querySelectorAll('[data-elpis-project-item]');
         var openItem = null;
-
-        removeProjectSeparator();
 
         items.forEach(function (item) {
             var itemProjectNo = item.getAttribute('data-project-no') || '';
@@ -1226,22 +1289,10 @@ $projects = elpis_sort_projects_open_first($projects, $openProjectNo);
             }
         });
 
-        if (openItem) {
-            list.insertBefore(openItem, list.firstChild);
+        reorderProjectList(openItem);
 
-            if (items.length > 1) {
-                var separator = document.createElement('li');
-                separator.className = 'elpis-project-separator';
-                separator.setAttribute('aria-hidden', 'true');
-                separator.setAttribute('role', 'presentation');
-                list.insertBefore(separator, openItem.nextSibling);
-            }
-
-            if (options.scroll !== false) {
-                openItem.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-        } else {
-            restoreProjectListOrder();
+        if (openItem && options.scroll !== false) {
+            openItem.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
         if (options.updateUrl !== false) {
