@@ -443,6 +443,7 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
         .elpis-sort-btn.is-desc::after { content: '↓'; opacity: 1; }
         table.elpis-table tbody tr:last-child td { border-bottom: 0; }
         table.elpis-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        table.elpis-table td.date { white-space: nowrap; }
         table.elpis-table tbody tr.elpis-row--alert { background: var(--kvt-row-alert); }
         table.elpis-table tbody tr.elpis-row--orange { background: var(--kvt-row-orange); }
         table.elpis-table tbody tr.elpis-row--warn { background: var(--kvt-row-warn); }
@@ -643,10 +644,12 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
                                                     <th><button type="button" class="elpis-sort-btn" data-sort-key="workorder"><?= elpis_h(LOC('elpis.col.workorder')) ?></button></th>
                                                     <th><button type="button" class="elpis-sort-btn" data-sort-key="item"><?= elpis_h(LOC('elpis.col.item')) ?></button></th>
                                                     <th><button type="button" class="elpis-sort-btn" data-sort-key="description"><?= elpis_h(LOC('elpis.col.description')) ?></button></th>
+                                                    <th><button type="button" class="elpis-sort-btn" data-sort-key="material_status"><?= elpis_h(LOC('elpis.col.material_status')) ?></button></th>
                                                     <th class="num"><button type="button" class="elpis-sort-btn num" data-sort-key="to_order"><?= elpis_h(LOC('elpis.col.to_order')) ?></button></th>
                                                     <th class="num"><button type="button" class="elpis-sort-btn num" data-sort-key="ordered"><?= elpis_h(LOC('elpis.col.ordered')) ?></button></th>
                                                     <th class="num"><button type="button" class="elpis-sort-btn num" data-sort-key="open"><?= elpis_h(LOC('elpis.col.outstanding')) ?></button></th>
                                                     <th class="num"><button type="button" class="elpis-sort-btn num" data-sort-key="received"><?= elpis_h(LOC('elpis.col.received')) ?></button></th>
+                                                    <th><button type="button" class="elpis-sort-btn" data-sort-key="expected_receipt"><?= elpis_h(LOC('elpis.col.expected_receipt')) ?></button></th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -656,6 +659,8 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
                                                     $qtyOrdered = (float) ($line['qty_ordered'] ?? 0);
                                                     $qtyOpen = (float) ($line['qty_open'] ?? max(0.0, $qtyOrdered - (float) ($line['qty_received'] ?? 0)));
                                                     $qtyReceived = (float) ($line['qty_received'] ?? 0);
+                                                    $materialStatusLabel = elpis_material_status_label((string) ($line['material_status'] ?? ''));
+                                                    $expectedReceiptDisplay = elpis_line_expected_receipt_display($line);
                                                     $rowClass = elpis_line_row_class($qtyToOrder, $qtyOrdered, $qtyReceived, $qtyOpen);
                                                     $rowClasses = array_filter([$rowClass]);
                                                     ?>
@@ -665,19 +670,23 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
                                                         data-sort-workorder="<?= elpis_h(strtolower((string) ($line['job_task_no'] ?? ''))) ?>"
                                                         data-sort-item="<?= elpis_h(strtolower((string) ($line['item_no'] ?? ''))) ?>"
                                                         data-sort-description="<?= elpis_h(strtolower((string) ($line['description'] ?? ''))) ?>"
+                                                        data-sort-material_status="<?= elpis_h(strtolower($materialStatusLabel)) ?>"
                                                         data-sort-to_order="<?= elpis_h((string) $qtyToOrder) ?>"
                                                         data-sort-ordered="<?= elpis_h((string) $qtyOrdered) ?>"
                                                         data-sort-open="<?= elpis_h((string) $qtyOpen) ?>"
                                                         data-sort-received="<?= elpis_h((string) $qtyReceived) ?>"
+                                                        data-sort-expected_receipt="<?= elpis_h((string) ($line['expected_receipt_date'] ?? '')) ?>"
                                                         <?= $rowClasses !== [] ? ' class="' . elpis_h(implode(' ', $rowClasses)) . '"' : '' ?>
                                                     >
                                                         <td><?= elpis_h((string) ($line['job_task_no'] ?? '')) ?></td>
                                                         <td><?= elpis_h((string) ($line['item_no'] ?? '')) ?></td>
                                                         <td><?= elpis_h((string) ($line['description'] ?? '')) ?></td>
+                                                        <td><?= elpis_h($materialStatusLabel) ?></td>
                                                         <td class="num"><?= elpis_h(elpis_format_qty($qtyToOrder)) ?></td>
                                                         <td class="num"><?= elpis_h(elpis_format_qty($qtyOrdered)) ?></td>
                                                         <td class="num"><?= elpis_h(elpis_format_qty($qtyOpen)) ?></td>
                                                         <td class="num"><?= elpis_h(elpis_format_qty($qtyReceived)) ?></td>
+                                                        <td class="date"><?= elpis_h($expectedReceiptDisplay) ?></td>
                                                     </tr>
                                                 <?php endforeach; ?>
                                             </tbody>

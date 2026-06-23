@@ -318,6 +318,54 @@ function elpis_normalize_project_row(array $row): array
     ];
 }
 
+function elpis_normalize_bc_date(?string $value): string
+{
+    $value = trim((string) $value);
+    if ($value === '' || str_starts_with($value, '0001-01-01')) {
+        return '';
+    }
+
+    return $value;
+}
+
+function elpis_format_display_date(?string $value): string
+{
+    $value = elpis_normalize_bc_date($value);
+    if ($value === '') {
+        return '';
+    }
+
+    $timestamp = strtotime($value);
+    if ($timestamp === false) {
+        return $value;
+    }
+
+    return date('d-m-Y', $timestamp);
+}
+
+function elpis_line_still_expecting_receipt(array $line): bool
+{
+    if (!empty($line['completely_received'])) {
+        return false;
+    }
+
+    $qtyOpen = (float) ($line['qty_open'] ?? 0);
+    $qtyToOrder = (float) ($line['qty_to_order'] ?? 0);
+    $qtyOrdered = (float) ($line['qty_ordered'] ?? 0);
+    $qtyReceived = (float) ($line['qty_received'] ?? 0);
+
+    return $qtyOpen > 0 || $qtyToOrder > 0 || ($qtyOrdered > 0 && $qtyReceived < $qtyOrdered);
+}
+
+function elpis_line_expected_receipt_display(array $line): string
+{
+    if (!elpis_line_still_expecting_receipt($line)) {
+        return '';
+    }
+
+    return elpis_format_display_date((string) ($line['expected_receipt_date'] ?? ''));
+}
+
 function elpis_normalize_planning_line_row(array $row): array
 {
     $purchaseOrderNo = trim((string) ($row['LVS_Purchase_Order_No'] ?? ''));
@@ -344,6 +392,8 @@ function elpis_normalize_planning_line_row(array $row): array
         'qty_received' => $qtyReceived,
         'purchase_order_no' => $purchaseOrderNo,
         'completely_received' => (bool) ($row['LVS_Completely_Received'] ?? false),
+        'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['KVT_Expected_Receipt_Date'] ?? '')),
+        'material_status' => strtoupper(trim((string) ($row['KVT_Status_Material'] ?? ''))),
         'line_no' => (int) ($row['Line_No'] ?? 0),
     ];
 }
@@ -426,7 +476,7 @@ function elpis_fetch_projects_for_manager(string $company, string $projectManage
 
 function elpis_planning_line_select_fields(): string
 {
-    return 'Job_No,Job_Task_No,Line_No,Type,No,Description,Quantity,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Purchase_Order_No,LVS_Completely_Received';
+    return 'Job_No,Job_Task_No,Line_No,Type,No,Description,Quantity,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Purchase_Order_No,LVS_Completely_Received,KVT_Expected_Receipt_Date,KVT_Status_Material';
 }
 
 function elpis_collect_planning_line_row(array $row, array &$lines): void
@@ -548,11 +598,19 @@ function elpis_fetch_planning_lines_by_projects(string $company, array $projectN
 
 function elpis_line_search_blob(array $line): string
 {
-    return strtolower(implode(' ', array_filter([
+    $materialStatus = strtoupper(trim((string) ($line['material_status'] ?? '')));
+    $parts = [
         (string) ($line['job_task_no'] ?? ''),
         (string) ($line['item_no'] ?? ''),
         (string) ($line['description'] ?? ''),
-    ], static function (string $value): bool {
+        $materialStatus,
+    ];
+
+    if ($materialStatus !== '' && function_exists('elpis_material_status_label')) {
+        $parts[] = elpis_material_status_label($materialStatus);
+    }
+
+    return strtolower(implode(' ', array_filter($parts, static function (string $value): bool {
         return trim($value) !== '';
     })));
 }

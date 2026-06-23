@@ -49,6 +49,18 @@ const TRANSLATIONS = [
         'elpis.col.ordered' => 'Besteld',
         'elpis.col.outstanding' => 'Openstaand',
         'elpis.col.received' => 'Ontvangen',
+        'elpis.col.material_status' => 'Materiaalstatus',
+        'elpis.col.expected_receipt' => 'Verwachte ontvangst',
+        'elpis.material_status.O' => 'Onbekend',
+        'elpis.material_status.N' => 'Niet nodig',
+        'elpis.material_status.X' => 'Niet op tijd',
+        'elpis.material_status.T' => 'Te laat',
+        'elpis.material_status.I' => 'Inkooporder aanwezig',
+        'elpis.material_status.V' => 'Voorraad',
+        'elpis.material_status.G' => 'Gepicked',
+        'elpis.material_status.B' => 'Uitgegeven',
+        'elpis.material_status.A' => 'Aangenomen',
+        'elpis.material_status.C' => 'Gecontroleerd',
         'elpis.empty.managers' => 'Geen projectmanagers gevonden',
         'elpis.empty.projects' => 'Geen projecten gevonden voor deze projectmanager.',
         'elpis.empty.lines' => 'Geen inkoopplanningsregels voor dit project.',
@@ -80,6 +92,18 @@ const TRANSLATIONS = [
         'elpis.col.ordered' => 'Ordered',
         'elpis.col.outstanding' => 'Outstanding',
         'elpis.col.received' => 'Received',
+        'elpis.col.material_status' => 'Material status',
+        'elpis.col.expected_receipt' => 'Expected receipt',
+        'elpis.material_status.O' => 'Unknown',
+        'elpis.material_status.N' => 'Not required',
+        'elpis.material_status.X' => 'Not on time',
+        'elpis.material_status.T' => 'Late',
+        'elpis.material_status.I' => 'Purchase order present',
+        'elpis.material_status.V' => 'Stock',
+        'elpis.material_status.G' => 'Picked',
+        'elpis.material_status.B' => 'Issued',
+        'elpis.material_status.A' => 'Accepted',
+        'elpis.material_status.C' => 'Checked',
         'elpis.empty.managers' => 'No project managers found',
         'elpis.empty.projects' => 'No projects found for this project manager.',
         'elpis.empty.lines' => 'No purchase planning lines for this project.',
@@ -111,6 +135,18 @@ const TRANSLATIONS = [
         'elpis.col.ordered' => 'Bestellt',
         'elpis.col.outstanding' => 'Offen',
         'elpis.col.received' => 'Erhalten',
+        'elpis.col.material_status' => 'Materialstatus',
+        'elpis.col.expected_receipt' => 'Erwarteter Eingang',
+        'elpis.material_status.O' => 'Unbekannt',
+        'elpis.material_status.N' => 'Nicht erforderlich',
+        'elpis.material_status.X' => 'Nicht rechtzeitig',
+        'elpis.material_status.T' => 'Verspätet',
+        'elpis.material_status.I' => 'Bestellung vorhanden',
+        'elpis.material_status.V' => 'Lager',
+        'elpis.material_status.G' => 'Kommissioniert',
+        'elpis.material_status.B' => 'Ausgegeben',
+        'elpis.material_status.A' => 'Angenommen',
+        'elpis.material_status.C' => 'Geprüft',
         'elpis.empty.managers' => 'Keine Projektmanager gefunden',
         'elpis.empty.projects' => 'Keine Projekte für diesen Projektmanager gefunden.',
         'elpis.empty.lines' => 'Keine Einkaufsplanungszeilen für dieses Projekt.',
@@ -142,6 +178,18 @@ const TRANSLATIONS = [
         'elpis.col.ordered' => 'Commandé',
         'elpis.col.outstanding' => 'En cours',
         'elpis.col.received' => 'Reçu',
+        'elpis.col.material_status' => 'Statut matériel',
+        'elpis.col.expected_receipt' => 'Réception prévue',
+        'elpis.material_status.O' => 'Inconnu',
+        'elpis.material_status.N' => 'Non requis',
+        'elpis.material_status.X' => 'Pas à temps',
+        'elpis.material_status.T' => 'En retard',
+        'elpis.material_status.I' => 'Commande présente',
+        'elpis.material_status.V' => 'Stock',
+        'elpis.material_status.G' => 'Prélevé',
+        'elpis.material_status.B' => 'Distribué',
+        'elpis.material_status.A' => 'Accepté',
+        'elpis.material_status.C' => 'Contrôlé',
         'elpis.empty.managers' => 'Aucun chef de projet trouvé',
         'elpis.empty.projects' => 'Aucun projet trouvé pour ce chef de projet.',
         'elpis.empty.lines' => 'Aucune ligne de planification d\'achat pour ce projet.',
@@ -219,6 +267,19 @@ function LOC(string $key, mixed ...$args): string
     $string = $translations[$key] ?? (TRANSLATIONS['nl'][$key] ?? $key);
 
     return $args !== [] ? sprintf($string, ...$args) : $string;
+}
+
+function elpis_material_status_label(string $code): string
+{
+    $code = strtoupper(trim($code));
+    if ($code === '') {
+        return '';
+    }
+
+    $key = 'elpis.material_status.' . $code;
+    $label = LOC($key);
+
+    return $label !== $key ? $label : $code;
 }
 
 function localizationFlagSvg(string $lang): string
