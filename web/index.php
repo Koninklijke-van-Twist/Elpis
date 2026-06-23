@@ -659,7 +659,10 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
                                                     $qtyOrdered = (float) ($line['qty_ordered'] ?? 0);
                                                     $qtyOpen = (float) ($line['qty_open'] ?? max(0.0, $qtyOrdered - (float) ($line['qty_received'] ?? 0)));
                                                     $qtyReceived = (float) ($line['qty_received'] ?? 0);
-                                                    $materialStatusLabel = elpis_material_status_label((string) ($line['material_status'] ?? ''));
+                                                    $materialStatusLabel = (string) ($line['material_status_label'] ?? '');
+                                                    if ($materialStatusLabel === '' && ($line['material_status'] ?? '') !== '') {
+                                                        $materialStatusLabel = elpis_material_status_label((string) $line['material_status']);
+                                                    }
                                                     $expectedReceiptDisplay = elpis_line_expected_receipt_display($line);
                                                     $rowClass = elpis_line_row_class($qtyToOrder, $qtyOrdered, $qtyReceived, $qtyOpen);
                                                     $rowClasses = array_filter([$rowClass]);

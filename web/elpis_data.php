@@ -3,6 +3,7 @@
 /**
  * Includes/requires
  */
+require_once __DIR__ . '/localization.php';
 require_once __DIR__ . '/auth_helper.php';
 require_once __DIR__ . '/odata.php';
 
@@ -394,6 +395,9 @@ function elpis_normalize_planning_line_row(array $row): array
         'completely_received' => (bool) ($row['LVS_Completely_Received'] ?? false),
         'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['KVT_Expected_Receipt_Date'] ?? '')),
         'material_status' => strtoupper(trim((string) ($row['KVT_Status_Material'] ?? ''))),
+        'material_status_label' => function_exists('elpis_material_status_label')
+            ? elpis_material_status_label((string) ($row['KVT_Status_Material'] ?? ''))
+            : '',
         'line_no' => (int) ($row['Line_No'] ?? 0),
     ];
 }

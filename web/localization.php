@@ -277,9 +277,17 @@ function elpis_material_status_label(string $code): string
     }
 
     $key = 'elpis.material_status.' . $code;
-    $label = LOC($key);
+    $lang = getCurrentLanguage();
 
-    return $label !== $key ? $label : $code;
+    if (isset(TRANSLATIONS[$lang][$key])) {
+        return TRANSLATIONS[$lang][$key];
+    }
+
+    if (isset(TRANSLATIONS['nl'][$key])) {
+        return TRANSLATIONS['nl'][$key];
+    }
+
+    return TRANSLATIONS['nl']['elpis.material_status.O'] ?? 'Onbekend';
 }
 
 function localizationFlagSvg(string $lang): string
