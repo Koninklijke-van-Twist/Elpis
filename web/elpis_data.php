@@ -17,7 +17,9 @@ const ELPI_PROJECT_MANAGER_EMAIL_MAP = [
 
 const ELPI_DEFAULT_USER_EMAIL = 'localtester@kvt.nl';
 
-const ELPI_PROJECT_MANAGERS_TTL = 86400;
+const ELPI_CACHE_TTL = 86400;
+
+const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
 const ELPI_MANAGER_ALL = '*';
 
@@ -45,7 +47,7 @@ function elpis_company_entity_url(string $baseUrl, string $environment, string $
     return $url;
 }
 
-function elpis_fetch_rows(string $company, string $entitySet, array $query, int $ttl = 3600): array
+function elpis_fetch_rows(string $company, string $entitySet, array $query, int $ttl = ELPI_CACHE_TTL): array
 {
     global $baseUrl;
 
@@ -56,7 +58,7 @@ function elpis_fetch_rows(string $company, string $entitySet, array $query, int 
     return odata_get_all($url, $auth, $ttl);
 }
 
-function elpis_try_fetch_rows(string $company, string $entitySet, array $query, int $ttl = 3600): array
+function elpis_try_fetch_rows(string $company, string $entitySet, array $query, int $ttl = ELPI_CACHE_TTL): array
 {
     try {
         return elpis_fetch_rows($company, $entitySet, $query, $ttl);
@@ -74,7 +76,7 @@ function elpis_default_companies(): array
     ];
 }
 
-function elpis_companies_for_page(int $ttl = 3600): array
+function elpis_companies_for_page(int $ttl = ELPI_CACHE_TTL): array
 {
     try {
         $result = auth_discover_companies_across_active_environments($ttl);
@@ -444,7 +446,7 @@ function elpis_collect_projects_from_rows(array $rows): array
     return $projects;
 }
 
-function elpis_fetch_projects_for_company(string $company, int $ttl = 3600): array
+function elpis_fetch_projects_for_company(string $company, int $ttl = ELPI_CACHE_TTL): array
 {
     $rows = elpis_try_fetch_rows($company, 'AppProjecten', [
         '$select' => 'No,Description,Status,Project_Manager',
@@ -456,10 +458,10 @@ function elpis_fetch_projects_for_company(string $company, int $ttl = 3600): arr
     return elpis_collect_projects_from_rows($rows);
 }
 
-function elpis_fetch_projects_for_manager(string $company, string $projectManager, int $ttl = 3600): array
+function elpis_filter_projects_for_manager(array $projects, string $projectManager): array
 {
     if (elpis_is_all_managers_selection($projectManager)) {
-        return elpis_fetch_projects_for_company($company, $ttl);
+        return array_values($projects);
     }
 
     $manager = elpis_normalize_bc_username($projectManager);
@@ -467,15 +469,17 @@ function elpis_fetch_projects_for_manager(string $company, string $projectManage
         return [];
     }
 
-    $escaped = elpis_escape_odata_string($manager);
-    $rows = elpis_try_fetch_rows($company, 'AppProjecten', [
-        '$select' => 'No,Description,Status,Project_Manager',
-        '$filter' => "Project_Manager eq '" . $escaped . "'",
-        '$orderby' => 'No desc',
-        '$top' => '200',
-    ], $ttl);
+    return array_values(array_filter($projects, static function (array $project) use ($manager): bool {
+        return strcasecmp((string) ($project['project_manager'] ?? ''), $manager) === 0;
+    }));
+}
 
-    return elpis_collect_projects_from_rows($rows);
+function elpis_fetch_projects_for_manager(string $company, string $projectManager, int $ttl = ELPI_CACHE_TTL): array
+{
+    return elpis_filter_projects_for_manager(
+        elpis_fetch_projects_for_company($company, $ttl),
+        $projectManager
+    );
 }
 
 function elpis_planning_line_select_fields(): string
@@ -495,7 +499,7 @@ function elpis_collect_planning_line_row(array $row, array &$lines): void
     }
 }
 
-function elpis_fetch_planning_lines_for_project(string $company, string $projectNo, int $ttl = 3600): array
+function elpis_fetch_planning_lines_for_project(string $company, string $projectNo, int $ttl = ELPI_CACHE_TTL): array
 {
     $projectNo = trim($projectNo);
     if ($projectNo === '') {
@@ -536,7 +540,7 @@ function elpis_planning_lines_chunk_count(array $projectNos): int
     return (int) ceil(count($projectNos) / ELPI_PLANNING_LINES_CHUNK_SIZE);
 }
 
-function elpis_fetch_planning_lines_chunk(string $company, array $projectNos, int $ttl = 3600): array
+function elpis_fetch_planning_lines_chunk(string $company, array $projectNos, int $ttl = ELPI_CACHE_TTL): array
 {
     $projectNos = elpis_normalize_project_nos($projectNos);
     $byProject = [];
@@ -574,30 +578,132 @@ function elpis_fetch_planning_lines_chunk(string $company, array $projectNos, in
     return $byProject;
 }
 
-function elpis_fetch_planning_lines_by_projects(string $company, array $projectNos, int $ttl = 3600): array
+function elpis_fetch_planning_lines_for_company(string $company, int $ttl = ELPI_CACHE_TTL): array
 {
-    $projectNos = elpis_normalize_project_nos($projectNos);
-
-    if ($projectNos === []) {
-        return [];
-    }
+    $rows = elpis_try_fetch_rows($company, 'AppProjectInkoopPlanningsRegel', [
+        '$filter' => "Type eq 'Artikel'",
+        '$select' => elpis_planning_line_select_fields(),
+        '$orderby' => 'Job_No asc,Job_Task_No asc,Line_No asc',
+    ], $ttl);
 
     $byProject = [];
-    foreach ($projectNos as $projectNo) {
-        $byProject[$projectNo] = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+
+        $jobNo = trim((string) ($row['Job_No'] ?? ''));
+        if ($jobNo === '') {
+            continue;
+        }
+
+        if (!isset($byProject[$jobNo])) {
+            $byProject[$jobNo] = [];
+        }
+
+        elpis_collect_planning_line_row($row, $byProject[$jobNo]);
     }
 
-    $chunks = array_chunk($projectNos, ELPI_PLANNING_LINES_CHUNK_SIZE);
-    foreach ($chunks as $chunk) {
-        $chunkResult = elpis_fetch_planning_lines_chunk($company, $chunk, $ttl);
-        foreach ($chunkResult as $jobNo => $lines) {
-            foreach ($lines as $line) {
-                $byProject[$jobNo][] = $line;
+    return $byProject;
+}
+
+function elpis_fetch_planning_lines_by_projects(string $company, array $projectNos, int $ttl = ELPI_CACHE_TTL): array
+{
+    $projectNos = elpis_normalize_project_nos($projectNos);
+    $allLines = elpis_fetch_planning_lines_for_company($company, $ttl);
+    $byProject = [];
+
+    foreach ($projectNos as $projectNo) {
+        $byProject[$projectNo] = $allLines[$projectNo] ?? [];
+    }
+
+    return $byProject;
+}
+
+function elpis_collect_material_status_codes(array $linesByProject): array
+{
+    $codes = [];
+    foreach ($linesByProject as $lines) {
+        if (!is_array($lines)) {
+            continue;
+        }
+
+        foreach ($lines as $line) {
+            if (!is_array($line)) {
+                continue;
+            }
+
+            $code = strtoupper(trim((string) ($line['material_status'] ?? '')));
+            if ($code !== '') {
+                $codes[$code] = true;
             }
         }
     }
 
-    return $byProject;
+    $list = array_keys($codes);
+    usort($list, static function (string $left, string $right): int {
+        return strcasecmp(elpis_material_status_label($left), elpis_material_status_label($right));
+    });
+
+    return $list;
+}
+
+function elpis_clear_odata_cache(): int
+{
+    if (!function_exists('cache_base_dir')) {
+        return 0;
+    }
+
+    $dir = cache_base_dir();
+    if (!is_dir($dir)) {
+        return 0;
+    }
+
+    $deleted = 0;
+    $entries = @scandir($dir);
+    if (!is_array($entries)) {
+        return 0;
+    }
+
+    foreach ($entries as $entry) {
+        if ($entry === '.' || $entry === '..' || $entry === '.cleanup_marker') {
+            continue;
+        }
+
+        $path = $dir . DIRECTORY_SEPARATOR . $entry;
+        if (is_file($path) && str_ends_with(strtolower($entry), '.json') && @unlink($path)) {
+            $deleted += 1;
+        }
+    }
+
+    return $deleted;
+}
+
+function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
+{
+    $summary = [
+        'companies' => 0,
+        'managers' => 0,
+        'projects' => 0,
+        'planning_line_projects' => 0,
+    ];
+
+    $companies = elpis_companies_for_page($ttl);
+    $summary['companies'] = count($companies);
+
+    foreach ($companies as $company) {
+        auth_set_current_company_context($company, $ttl);
+        $managers = elpis_fetch_project_managers($company, $ttl);
+        $summary['managers'] += count($managers);
+
+        $projects = elpis_fetch_projects_for_company($company, $ttl);
+        $summary['projects'] += count($projects);
+
+        $linesByProject = elpis_fetch_planning_lines_for_company($company, $ttl);
+        $summary['planning_line_projects'] += count($linesByProject);
+    }
+
+    return $summary;
 }
 
 function elpis_line_search_blob(array $line): string

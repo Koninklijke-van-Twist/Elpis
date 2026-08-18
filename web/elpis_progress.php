@@ -116,24 +116,12 @@ try {
     }
 
     elpis_progress_emit(['step' => 'projects', 'status' => 'start']);
-    $projects = elpis_fetch_projects_for_manager($company, $projectManager);
-    $projectNos = array_map(static function (array $project): string {
-        return (string) ($project['no'] ?? '');
-    }, $projects);
-    $lineChunks = elpis_planning_lines_chunk_count($projectNos);
-    if ($lineChunks > 0) {
-        elpis_progress_emit(['lineChunks' => $lineChunks]);
-    }
+    elpis_fetch_projects_for_manager($company, $projectManager);
     elpis_progress_emit(['step' => 'projects', 'status' => 'done']);
 
-    if ($projects !== [] && $lineChunks > 0) {
-        $chunks = array_chunk(elpis_normalize_project_nos($projectNos), ELPI_PLANNING_LINES_CHUNK_SIZE);
-        foreach ($chunks as $chunkIndex => $chunk) {
-            elpis_progress_emit(['step' => 'lines_' . $chunkIndex, 'status' => 'start']);
-            elpis_fetch_planning_lines_chunk($company, $chunk);
-            elpis_progress_emit(['step' => 'lines_' . $chunkIndex, 'status' => 'done']);
-        }
-    }
+    elpis_progress_emit(['step' => 'lines', 'status' => 'start']);
+    elpis_fetch_planning_lines_for_company($company);
+    elpis_progress_emit(['step' => 'lines', 'status' => 'done']);
 
     if ($company !== '') {
         elpis_save_dropdown_prefs($userEmail, $company, $projectManager);

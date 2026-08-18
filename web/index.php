@@ -82,7 +82,7 @@ function elpis_matches_search_tokens(string $haystack, array $tokens): bool
     return true;
 }
 
-function elpis_sort_projects_for_display(array $projects, string $openProjectNo, array $linesByProject): array
+function elpis_sort_projects_for_display(array $projects, array $linesByProject): array
 {
     if ($projects === []) {
         return [];
@@ -99,15 +99,10 @@ function elpis_sort_projects_for_display(array $projects, string $openProjectNo,
             'project' => $project,
             'index' => $index,
             'has_lines' => $projectNo !== '' && ($linesByProject[$projectNo] ?? []) !== [],
-            'is_open' => $openProjectNo !== '' && $projectNo === $openProjectNo,
         ];
     }
 
     usort($indexed, static function (array $left, array $right): int {
-        if ($left['is_open'] !== $right['is_open']) {
-            return $left['is_open'] ? -1 : 1;
-        }
-
         if ($left['has_lines'] !== $right['has_lines']) {
             return $left['has_lines'] ? -1 : 1;
         }
@@ -219,11 +214,13 @@ try {
 
     if ($projectManager !== '' && !$deferProjectsLoad) {
         $projects = elpis_fetch_projects_for_manager($company, $projectManager);
-        if ($projects !== []) {
-            $projectNos = array_map(static function (array $project): string {
-                return (string) ($project['no'] ?? '');
-            }, $projects);
-            $linesByProject = elpis_fetch_planning_lines_by_projects($company, $projectNos);
+        $allLinesByProject = elpis_fetch_planning_lines_for_company($company);
+        foreach ($projects as $project) {
+            $projectNo = (string) ($project['no'] ?? '');
+            if ($projectNo === '') {
+                continue;
+            }
+            $linesByProject[$projectNo] = $allLinesByProject[$projectNo] ?? [];
         }
     }
 
@@ -231,14 +228,20 @@ try {
         elpis_save_dropdown_prefs($userEmail, $company, $projectManager);
     }
 
-    if (!$deferProjectsLoad && $openProjectNo !== '' && !isset($linesByProject[$openProjectNo])) {
-        $openProjectNo = '';
+    if (!$deferProjectsLoad && $openProjectNo !== '') {
+        $knownProjectNos = array_map(static function (array $project): string {
+            return (string) ($project['no'] ?? '');
+        }, $projects);
+        if (!in_array($openProjectNo, $knownProjectNos, true)) {
+            $openProjectNo = '';
+        }
     }
 } catch (Throwable $loadError) {
     $errorKey = 'elpis.error.load_failed';
 }
 
-$projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByProject);
+$projects = elpis_sort_projects_for_display($projects, $linesByProject);
+$materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
 
 ?><!DOCTYPE html>
 <html lang="<?= elpis_h(getHtmlLang()) ?>">
@@ -323,8 +326,15 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
             background: #fff;
             box-shadow: 0 4px 14px rgba(0, 82, 155, 0.05);
         }
+        .elpis-project-header {
+            display: flex;
+            align-items: stretch;
+            background: #fff;
+        }
         .elpis-project-toggle {
-            width: 100%;
+            flex: 1;
+            min-width: 0;
+            width: auto;
             display: flex;
             flex-wrap: wrap;
             gap: 8px 12px;
@@ -332,7 +342,7 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
             justify-content: space-between;
             padding: 14px 16px;
             border: 0;
-            background: #fff;
+            background: transparent;
             color: var(--kvt-text);
             text-align: left;
             cursor: pointer;
@@ -340,7 +350,26 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
             text-decoration: none;
         }
         button.elpis-project-toggle { appearance: none; }
+        .elpis-project-copy {
+            appearance: none;
+            border: 0;
+            border-left: 1px solid var(--kvt-line);
+            background: transparent;
+            padding: 0 12px;
+            cursor: pointer;
+            font-size: 1.15rem;
+            line-height: 1;
+        }
+        .elpis-project-copy:hover { background: #eef7fd; }
         .elpis-project-toggle:hover { background: #f2f9ff; }
+        .elpis-project-item.is-highlighted {
+            box-shadow: 0 0 0 3px rgba(0, 153, 204, 0.55), 0 8px 22px rgba(0, 82, 155, 0.12);
+            animation: elpis-highlight-pulse 1.4s ease-out 1;
+        }
+        @keyframes elpis-highlight-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(0, 153, 204, 0.75); }
+            100% { box-shadow: 0 0 0 3px rgba(0, 153, 204, 0.55), 0 8px 22px rgba(0, 82, 155, 0.12); }
+        }
         .elpis-project-item.is-open {
             border-color: rgba(0, 153, 204, 0.45);
             box-shadow: 0 8px 22px rgba(0, 82, 155, 0.1);
@@ -357,6 +386,7 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
             border-color: #e3e3e3;
             box-shadow: none;
         }
+        .elpis-project-item--empty:not(.is-open) .elpis-project-header,
         .elpis-project-item--empty:not(.is-open) .elpis-project-toggle {
             background: #f3f3f3;
             color: var(--kvt-muted);
@@ -382,7 +412,31 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
             text-align: left;
             vertical-align: top;
         }
-        .elpis-search-wrap { margin: 14px 0 16px; }
+        .elpis-project-toolbar {
+            display: grid;
+            gap: 12px;
+            margin: 14px 0 16px;
+        }
+        .elpis-project-toolbar-filters {
+            display: grid;
+            gap: 12px;
+        }
+        .elpis-project-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .elpis-project-toolbar label { display: grid; gap: 6px; font-weight: 700; color: var(--kvt-perkins-blue); font-size: 0.9rem; }
+        .elpis-project-toolbar select {
+            font: inherit;
+            border-radius: 10px;
+            border: 1px solid var(--kvt-line);
+            padding: 12px 14px;
+            width: 100%;
+            box-sizing: border-box;
+            background: #fff;
+        }
+        .elpis-search-wrap { margin: 0; }
         .elpis-line-search-wrap { margin: 0 0 12px; }
         .elpis-search-wrap label { display: grid; gap: 6px; font-weight: 700; color: var(--kvt-perkins-blue); font-size: 0.9rem; }
         .elpis-search-wrap input {
@@ -397,15 +451,8 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
         .elpis-search-wrap input:focus { outline: 2px solid rgba(0, 153, 204, 0.35); border-color: var(--kvt-main-blue); }
         .elpis-search-empty { display: none; margin-top: 8px; }
         .elpis-search-empty.is-visible { display: block; }
-        .elpis-project-item.is-filtered-out { display: none; }
-        .elpis-project-separator {
-            list-style: none;
-            margin: 4px 0 14px;
-            padding: 0;
-            border: 0;
-            border-top: 2px solid rgba(0, 82, 155, 0.18);
-            box-shadow: 0 1px 0 rgba(0, 153, 204, 0.12);
-        }
+        .elpis-project-item.is-filtered-out:not(.is-pinned) { display: none; }
+        .elpis-project-item.is-pinned { display: block; }
         table.elpis-table tbody tr.is-filtered-out { display: none; }
         table.elpis-table thead th {
             background: linear-gradient(180deg, var(--kvt-perkins-blue) 0%, #0069b4 100%);
@@ -450,6 +497,7 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
         table.elpis-table tbody tr.elpis-row--ok { background: var(--kvt-row-ok); }
         @media (min-width: 640px) {
             .elpis-form-grid { grid-template-columns: 1fr 1fr; align-items: end; }
+            .elpis-project-toolbar-filters { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: end; }
         }
         .elpis-loader {
             position: fixed;
@@ -578,19 +626,36 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
             <?php elseif ($projects === []): ?>
                 <p class="elpis-muted"><?= elpis_h(LOC('elpis.empty.projects')) ?></p>
             <?php else: ?>
-                <div class="elpis-search-wrap">
-                    <label>
-                        <?= elpis_h(LOC('elpis.label.search')) ?>
-                        <input
-                            type="search"
-                            id="elpis-project-search"
-                            name="q"
-                            value="<?= elpis_h($projectSearchQuery) ?>"
-                            placeholder="<?= elpis_h(LOC('elpis.placeholder.search')) ?>"
-                            autocomplete="off"
-                            spellcheck="false"
-                        >
-                    </label>
+                <div class="elpis-project-toolbar">
+                    <div class="elpis-project-toolbar-filters">
+                        <div class="elpis-search-wrap">
+                            <label>
+                                <?= elpis_h(LOC('elpis.label.search')) ?>
+                                <input
+                                    type="search"
+                                    id="elpis-project-search"
+                                    name="q"
+                                    value="<?= elpis_h($projectSearchQuery) ?>"
+                                    placeholder="<?= elpis_h(LOC('elpis.placeholder.search')) ?>"
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                >
+                            </label>
+                        </div>
+                        <label>
+                            <?= elpis_h(LOC('elpis.label.material_status_filter')) ?>
+                            <select id="elpis-material-status-filter">
+                                <option value=""><?= elpis_h(LOC('elpis.material_status.all')) ?></option>
+                                <?php foreach ($materialStatusCodes as $statusCode): ?>
+                                    <option value="<?= elpis_h($statusCode) ?>"><?= elpis_h(elpis_material_status_label($statusCode)) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="elpis-project-actions">
+                        <button type="button" class="elpis-btn elpis-btn--compact" data-elpis-expand-all><?= elpis_h(LOC('elpis.btn.expand_all')) ?></button>
+                        <button type="button" class="elpis-btn elpis-btn--compact" data-elpis-collapse-all><?= elpis_h(LOC('elpis.btn.collapse_all')) ?></button>
+                    </div>
                     <p id="elpis-search-empty" class="elpis-muted elpis-search-empty"><?= elpis_h(LOC('elpis.empty.search')) ?></p>
                 </div>
                 <ul class="elpis-project-list" id="elpis-project-list">
@@ -600,26 +665,44 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
                         $projectLines = $linesByProject[$projectNo] ?? [];
                         $searchBlob = elpis_project_search_blob($project, $projectLines);
                         $projectMatchesSearch = elpis_matches_search_tokens($searchBlob, $projectSearchTokens);
-                        $isOpen = $projectNo !== '' && $projectNo === $openProjectNo;
                         $hasLines = $projectLines !== [];
+                        $isFocused = $projectNo !== '' && $projectNo === $openProjectNo;
+                        $isOpen = $hasLines || $isFocused;
+                        $shareUrl = elpis_url([
+                            'company' => $company,
+                            'manager' => $projectManager,
+                            'project' => $projectNo,
+                            'q' => null,
+                        ]);
                         ?>
                         <li
-                            class="elpis-project-item<?= $isOpen ? ' is-open' : '' ?><?= !$hasLines ? ' elpis-project-item--empty' : '' ?><?= !$projectMatchesSearch ? ' is-filtered-out' : '' ?>"
+                            class="elpis-project-item<?= $isOpen ? ' is-open' : '' ?><?= !$hasLines ? ' elpis-project-item--empty' : '' ?><?= !$projectMatchesSearch ? ' is-filtered-out' : '' ?><?= $isFocused ? ' is-highlighted is-pinned' : '' ?>"
                             data-elpis-project-item
                             data-project-no="<?= elpis_h($projectNo) ?>"
                             data-project-index="<?= (int) $projectIndex ?>"
                             data-has-lines="<?= $hasLines ? '1' : '0' ?>"
                             data-search-text="<?= elpis_h($searchBlob) ?>"
+                            <?= $isFocused ? ' data-elpis-focus-project="1"' : '' ?>
                         >
-                            <button type="button" class="elpis-project-toggle" data-elpis-project-toggle aria-expanded="<?= $isOpen ? 'true' : 'false' ?>">
-                                <span>
-                                    <span class="elpis-project-title"><?= elpis_h($projectNo) ?></span>
-                                    <?php if (trim((string) ($project['description'] ?? '')) !== ''): ?>
-                                        <span> — <?= elpis_h((string) $project['description']) ?></span>
-                                    <?php endif; ?>
-                                </span>
-                                <span class="elpis-project-chevron" aria-hidden="true">›</span>
-                            </button>
+                            <div class="elpis-project-header">
+                                <button type="button" class="elpis-project-toggle" data-elpis-project-toggle aria-expanded="<?= $isOpen ? 'true' : 'false' ?>">
+                                    <span>
+                                        <span class="elpis-project-title"><?= elpis_h($projectNo) ?></span>
+                                        <?php if (trim((string) ($project['description'] ?? '')) !== ''): ?>
+                                            <span> — <?= elpis_h((string) $project['description']) ?></span>
+                                        <?php endif; ?>
+                                    </span>
+                                    <span class="elpis-project-chevron" aria-hidden="true">›</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="elpis-project-copy"
+                                    data-elpis-copy-link
+                                    data-copy-url="<?= elpis_h($shareUrl) ?>"
+                                    title="<?= elpis_h(LOC('elpis.link.copy')) ?>"
+                                    aria-label="<?= elpis_h(LOC('elpis.link.copy')) ?>"
+                                >🔗</button>
+                            </div>
                             <div class="elpis-project-panel">
                                 <?php if ($projectLines === []): ?>
                                     <p class="elpis-muted"><?= elpis_h(LOC('elpis.empty.lines')) ?></p>
@@ -679,6 +762,7 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
                                                         data-sort-open="<?= elpis_h((string) $qtyOpen) ?>"
                                                         data-sort-received="<?= elpis_h((string) $qtyReceived) ?>"
                                                         data-sort-expected_receipt="<?= elpis_h((string) ($line['expected_receipt_date'] ?? '')) ?>"
+                                                        data-material-status="<?= elpis_h((string) ($line['material_status'] ?? '')) ?>"
                                                         <?= $rowClasses !== [] ? ' class="' . elpis_h(implode(' ', $rowClasses)) . '"' : '' ?>
                                                     >
                                                         <td><?= elpis_h((string) ($line['job_task_no'] ?? '')) ?></td>
@@ -698,9 +782,6 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
                                 <?php endif; ?>
                             </div>
                         </li>
-                        <?php if ($isOpen && count($projects) > 1): ?>
-                            <li class="elpis-project-separator" aria-hidden="true" role="presentation"></li>
-                        <?php endif; ?>
                     <?php endforeach; ?>
                 </ul>
             <?php endif; ?>
@@ -718,8 +799,8 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
 </div>
 
 <div id="elpis-loader-meta" hidden
-     data-project-count="<?= (int) count($projects) ?>"
-     data-chunk-size="<?= (int) ELPI_PLANNING_LINES_CHUNK_SIZE ?>"></div>
+     data-copy-ok="<?= elpis_h(LOC('elpis.link.copied')) ?>"
+     data-copy-fail="<?= elpis_h(LOC('elpis.link.copy_failed')) ?>"></div>
 <div id="elpis-loader" class="elpis-loader" aria-hidden="true" aria-live="polite" aria-busy="false">
     <div class="elpis-loader-panel">
         <div class="elpis-loader-spinner" aria-hidden="true"></div>
@@ -810,109 +891,6 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
         }
     }
 
-    function ensureLineChunkSlots(chunkCount) {
-        for (var index = 0; index < chunkCount; index += 1) {
-            addStepSlot('lines_' + index);
-        }
-    }
-
-    function getFilterValue(url, key) {
-        var fromUrl = url.searchParams.get(key);
-        if (fromUrl !== null && fromUrl !== '') {
-            return fromUrl;
-        }
-
-        var filterForm = document.getElementById('elpis-filter-form');
-        if (!filterForm) {
-            return '';
-        }
-
-        if (key === 'company') {
-            var companySelect = filterForm.querySelector('[data-elpis-company-select]');
-            return companySelect ? companySelect.value : '';
-        }
-
-        if (key === 'manager') {
-            var managerSelect = filterForm.querySelector('[data-elpis-manager-select]');
-            if (!managerSelect || managerSelect.disabled) {
-                return '';
-            }
-            return managerSelect.value;
-        }
-
-        return '';
-    }
-
-    function getSearchQuery(url) {
-        var fromUrl = url.searchParams.get('q');
-        if (fromUrl !== null && fromUrl !== '') {
-            return fromUrl;
-        }
-
-        var searchInput = document.getElementById('elpis-project-search');
-        return searchInput ? searchInput.value.trim() : '';
-    }
-
-    function sameDataFilters(targetUrl, currentUrl) {
-        return getFilterValue(targetUrl, 'company') === getFilterValue(currentUrl, 'company')
-            && getFilterValue(targetUrl, 'manager') === getFilterValue(currentUrl, 'manager')
-            && !targetUrl.searchParams.has('reload_managers');
-    }
-
-    function isProjectOnlyNavigation(targetUrl) {
-        var currentUrl = new URL(window.location.href);
-
-        if (!sameDataFilters(targetUrl, currentUrl)) {
-            return false;
-        }
-
-        if (getSearchQuery(targetUrl) !== getSearchQuery(currentUrl)) {
-            return false;
-        }
-
-        return (targetUrl.searchParams.get('project') || '') !== (currentUrl.searchParams.get('project') || '');
-    }
-
-    function shouldShowLineStepsOnly(url, options) {
-        options = options || {};
-
-        if (options.projectOnly) {
-            return true;
-        }
-
-        return isProjectOnlyNavigation(url);
-    }
-
-    function estimateLineChunkCount(url) {
-        if (url.searchParams.has('reload_managers')) {
-            return 0;
-        }
-
-        if (!getFilterValue(url, 'manager')) {
-            return 0;
-        }
-
-        var currentUrl = new URL(window.location.href);
-        if (!sameDataFilters(url, currentUrl)) {
-            return 0;
-        }
-
-        var meta = document.getElementById('elpis-loader-meta');
-        var chunkSize = meta ? parseInt(meta.getAttribute('data-chunk-size') || '12', 10) : 12;
-        var projectCount = meta ? parseInt(meta.getAttribute('data-project-count') || '0', 10) : 0;
-
-        if (projectCount > 0) {
-            return Math.ceil(projectCount / chunkSize);
-        }
-
-        var projectItems = document.querySelectorAll('[data-elpis-project-item]');
-        if (projectItems.length === 0) {
-            return 0;
-        }
-
-        return Math.ceil(projectItems.length / chunkSize);
-    }
-
     function urlFromForm(form) {
         var url = new URL(form.getAttribute('action') || window.location.pathname, window.location.href);
         var formData = new FormData(form);
@@ -933,27 +911,11 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
         return url;
     }
 
-    function buildStepIds(url, options) {
-        options = options || {};
-
-        if (shouldShowLineStepsOnly(url, options)) {
-            var lineChunkCount = estimateLineChunkCount(url);
-            var lineStepIds = [];
-            for (var index = 0; index < lineChunkCount; index += 1) {
-                lineStepIds.push('lines_' + index);
-            }
-            return lineStepIds;
-        }
-
+    function buildStepIds(url) {
         var stepIds = ['managers'];
 
         if (!url.searchParams.has('reload_managers')) {
-            stepIds.push('projects');
-
-            var chunkCount = estimateLineChunkCount(url);
-            for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
-                stepIds.push('lines_' + chunkIndex);
-            }
+            stepIds.push('projects', 'lines');
         }
 
         return stepIds;
@@ -966,10 +928,6 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
     function handleProgressEvent(eventData) {
         if (eventData.error) {
             throw new Error('progress failed');
-        }
-
-        if (typeof eventData.lineChunks === 'number' && eventData.lineChunks > 0) {
-            ensureLineChunkSlots(eventData.lineChunks);
         }
 
         if (eventData.status === 'done' && eventData.step) {
@@ -985,7 +943,7 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
         function startProgressLoad() {
             clearLoaderTimer();
             showLoader();
-            resetStepsGrid(buildStepIds(url, options));
+            resetStepsGrid(buildStepIds(url));
 
             var progressUrl = new URL('elpis_progress.php', window.location.href);
             var navigationStarted = false;
@@ -1164,8 +1122,7 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
     if (deferredProjectsSection) {
         var deferredUrl = new URL(window.location.href);
         runProgressAndNavigate(deferredUrl, {
-            delayMs: DELAY_MS,
-            projectOnly: getFilterValue(deferredUrl, 'manager') !== ''
+            delayMs: DELAY_MS
         });
     }
 })();
@@ -1173,7 +1130,9 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
 (function () {
     var searchInput = document.getElementById('elpis-project-search');
     var searchEmpty = document.getElementById('elpis-search-empty');
+    var materialFilter = document.getElementById('elpis-material-status-filter');
     var projectItems = document.querySelectorAll('[data-elpis-project-item]');
+    var loaderMeta = document.getElementById('elpis-loader-meta');
     var numericSortKeys = {
         to_order: true,
         ordered: true,
@@ -1199,6 +1158,18 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
         return true;
     }
 
+    function focusProjectNo() {
+        return new URL(window.location.href).searchParams.get('project') || '';
+    }
+
+    function setProjectOpen(item, isOpen) {
+        item.classList.toggle('is-open', isOpen);
+        var toggle = item.querySelector('[data-elpis-project-toggle]');
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        }
+    }
+
     function syncProjectSearchToUrl() {
         if (!searchInput) {
             return;
@@ -1215,151 +1186,132 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
         window.history.replaceState({}, '', url.pathname + url.search);
     }
 
-    function removeProjectSeparator() {
-        var list = document.getElementById('elpis-project-list');
-        if (!list) {
-            return;
-        }
-
-        var separator = list.querySelector('.elpis-project-separator');
-        if (separator) {
-            separator.remove();
-        }
-    }
-
-    function compareProjectItems(left, right) {
-        var leftHasLines = left.getAttribute('data-has-lines') === '1';
-        var rightHasLines = right.getAttribute('data-has-lines') === '1';
-        if (leftHasLines !== rightHasLines) {
-            return leftHasLines ? -1 : 1;
-        }
-
-        return parseInt(left.getAttribute('data-project-index') || '0', 10)
-            - parseInt(right.getAttribute('data-project-index') || '0', 10);
-    }
-
-    function reorderProjectList(openItem) {
-        var list = document.getElementById('elpis-project-list');
-        if (!list) {
-            return;
-        }
-
-        removeProjectSeparator();
-
-        var items = Array.prototype.slice.call(list.querySelectorAll('[data-elpis-project-item]'));
-        var others = openItem
-            ? items.filter(function (item) {
-                return item !== openItem;
-            })
-            : items.slice();
-        others.sort(compareProjectItems);
-
-        var sequence = [];
-        if (openItem) {
-            sequence.push(openItem);
-            if (items.length > 1) {
-                var separator = document.createElement('li');
-                separator.className = 'elpis-project-separator';
-                separator.setAttribute('aria-hidden', 'true');
-                separator.setAttribute('role', 'presentation');
-                sequence.push(separator);
-            }
-        }
-
-        sequence = sequence.concat(others);
-        sequence.forEach(function (node) {
-            list.appendChild(node);
-        });
-    }
-
-    function restoreProjectListOrder() {
-        reorderProjectList(null);
-    }
-
-    function applyOpenProject(projectNo, options) {
-        options = options || {};
-        var list = document.getElementById('elpis-project-list');
-        if (!list) {
-            return;
-        }
-
-        var items = list.querySelectorAll('[data-elpis-project-item]');
-        var openItem = null;
-
-        items.forEach(function (item) {
-            var itemProjectNo = item.getAttribute('data-project-no') || '';
-            var shouldOpen = projectNo !== '' && itemProjectNo === projectNo;
-            item.classList.toggle('is-open', shouldOpen);
-
-            var toggle = item.querySelector('[data-elpis-project-toggle]');
-            if (toggle) {
-                toggle.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
-            }
-
-            if (shouldOpen) {
-                openItem = item;
-            }
-        });
-
-        reorderProjectList(openItem);
-
-        if (openItem && options.scroll !== false) {
-            openItem.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-
-        if (options.updateUrl !== false) {
-            var url = new URL(window.location.href);
-            if (projectNo === '') {
-                url.searchParams.delete('project');
-            } else {
-                url.searchParams.set('project', projectNo);
-            }
-            window.history.pushState({}, '', url.pathname + url.search);
-        }
-    }
-
-    function applyProjectSearch() {
+    function applyProjectFilters() {
         var query = normalizeSearchQuery(searchInput ? searchInput.value : '');
         var tokens = query === '' ? [] : query.split(/\s+/).filter(Boolean);
+        var statusFilter = materialFilter ? materialFilter.value : '';
+        var pinnedProjectNo = focusProjectNo();
         var visibleCount = 0;
 
         projectItems.forEach(function (item) {
             var projectHaystack = item.getAttribute('data-search-text') || '';
             var projectMatches = matchesTokens(projectHaystack, tokens);
+            var projectNo = item.getAttribute('data-project-no') || '';
+            var isPinned = pinnedProjectNo !== '' && projectNo === pinnedProjectNo;
+            var matchingLineCount = 0;
 
-            item.classList.toggle('is-filtered-out', !projectMatches);
-            if (projectMatches) {
+            item.querySelectorAll('[data-elpis-line-row]').forEach(function (row) {
+                var rowHaystack = row.getAttribute('data-search-text') || '';
+                var rowMatchesSearch = matchesTokens(rowHaystack, tokens);
+                var lineSearchInput = item.querySelector('[data-elpis-line-search]');
+                var lineTokens = [];
+                if (lineSearchInput) {
+                    var lineQuery = normalizeSearchQuery(lineSearchInput.value);
+                    lineTokens = lineQuery === '' ? [] : lineQuery.split(/\s+/).filter(Boolean);
+                }
+                var rowMatchesLineSearch = matchesTokens(rowHaystack, lineTokens);
+                var rowStatus = row.getAttribute('data-material-status') || '';
+                var rowMatchesStatus = statusFilter === '' || rowStatus === statusFilter;
+                var rowVisible = rowMatchesSearch && rowMatchesLineSearch && rowMatchesStatus;
+                row.classList.toggle('is-filtered-out', !rowVisible);
+                if (rowVisible) {
+                    matchingLineCount += 1;
+                }
+            });
+
+            var hasLineFilter = statusFilter !== '';
+            var projectVisible = projectMatches && (!hasLineFilter || matchingLineCount > 0);
+            if (isPinned) {
+                projectVisible = true;
+            }
+
+            item.classList.toggle('is-filtered-out', !projectVisible);
+            item.classList.toggle('is-pinned', isPinned);
+            item.classList.toggle('is-highlighted', isPinned);
+            if (projectVisible) {
                 visibleCount += 1;
             }
         });
 
         if (searchEmpty) {
-            searchEmpty.classList.toggle('is-visible', tokens.length > 0 && visibleCount === 0);
+            var hasActiveFilter = tokens.length > 0 || statusFilter !== '';
+            searchEmpty.classList.toggle('is-visible', hasActiveFilter && visibleCount === 0);
         }
 
         syncProjectSearchToUrl();
     }
 
     function applyLineSearch(input) {
-        var panel = input.closest('.elpis-project-panel');
-        if (!panel) {
+        applyProjectFilters();
+    }
+
+    function highlightFocusedProject() {
+        var projectNo = focusProjectNo();
+        if (projectNo === '') {
             return;
         }
 
-        var query = normalizeSearchQuery(input.value);
-        var tokens = query === '' ? [] : query.split(/\s+/).filter(Boolean);
-
-        panel.querySelectorAll('[data-elpis-line-row]').forEach(function (row) {
-            var rowHaystack = row.getAttribute('data-search-text') || '';
-            var rowMatches = matchesTokens(rowHaystack, tokens);
-            row.classList.toggle('is-filtered-out', !rowMatches);
+        var target = null;
+        projectItems.forEach(function (item) {
+            if ((item.getAttribute('data-project-no') || '') === projectNo) {
+                target = item;
+            }
         });
+
+        if (!target) {
+            return;
+        }
+
+        setProjectOpen(target, true);
+        target.classList.add('is-pinned', 'is-highlighted');
+        target.classList.remove('is-filtered-out');
+        window.setTimeout(function () {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 50);
+    }
+
+    function copyProjectLink(button) {
+        var relativeUrl = button.getAttribute('data-copy-url') || '';
+        var absoluteUrl = relativeUrl === '' ? window.location.href : new URL(relativeUrl, window.location.href).href;
+        var okMessage = loaderMeta ? loaderMeta.getAttribute('data-copy-ok') : '';
+        var failMessage = loaderMeta ? loaderMeta.getAttribute('data-copy-fail') : '';
+
+        function copied() {
+            button.setAttribute('title', okMessage || 'OK');
+        }
+
+        function failed() {
+            button.setAttribute('title', failMessage || '');
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(absoluteUrl).then(copied).catch(failed);
+            return;
+        }
+
+        var helper = document.createElement('textarea');
+        helper.value = absoluteUrl;
+        document.body.appendChild(helper);
+        helper.select();
+        try {
+            document.execCommand('copy');
+            copied();
+        } catch (error) {
+            failed();
+        }
+        helper.remove();
     }
 
     if (searchInput) {
-        searchInput.addEventListener('input', applyProjectSearch);
-        applyProjectSearch();
+        searchInput.addEventListener('input', applyProjectFilters);
     }
+
+    if (materialFilter) {
+        materialFilter.addEventListener('change', applyProjectFilters);
+    }
+
+    applyProjectFilters();
+    highlightFocusedProject();
 
     document.querySelectorAll('[data-elpis-line-search]').forEach(function (input) {
         input.addEventListener('input', function () {
@@ -1374,15 +1326,38 @@ $projects = elpis_sort_projects_for_display($projects, $openProjectNo, $linesByP
                 return;
             }
 
-            var projectNo = item.getAttribute('data-project-no') || '';
-            var willOpen = !item.classList.contains('is-open');
-            applyOpenProject(willOpen ? projectNo : '');
+            setProjectOpen(item, !item.classList.contains('is-open'));
         });
     });
 
+    document.querySelectorAll('[data-elpis-copy-link]').forEach(function (button) {
+        button.addEventListener('click', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            copyProjectLink(button);
+        });
+    });
+
+    var expandAll = document.querySelector('[data-elpis-expand-all]');
+    var collapseAll = document.querySelector('[data-elpis-collapse-all]');
+    if (expandAll) {
+        expandAll.addEventListener('click', function () {
+            projectItems.forEach(function (item) {
+                setProjectOpen(item, true);
+            });
+        });
+    }
+    if (collapseAll) {
+        collapseAll.addEventListener('click', function () {
+            projectItems.forEach(function (item) {
+                setProjectOpen(item, false);
+            });
+        });
+    }
+
     window.addEventListener('popstate', function () {
-        var url = new URL(window.location.href);
-        applyOpenProject(url.searchParams.get('project') || '', { updateUrl: false });
+        applyProjectFilters();
+        highlightFocusedProject();
     });
 
     document.querySelectorAll('[data-elpis-sortable-table]').forEach(function (table) {

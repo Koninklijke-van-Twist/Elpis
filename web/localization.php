@@ -67,6 +67,13 @@ const TRANSLATIONS = [
         'elpis.error.load_failed' => 'Gegevens ophalen mislukt. Probeer het later opnieuw.',
         'elpis.loader.wait' => 'Even geduld...',
         'elpis.loader.loading' => 'Gegevens ophalen uit Business Central',
+        'elpis.btn.expand_all' => 'Alles openklappen',
+        'elpis.btn.collapse_all' => 'Alles dichtklappen',
+        'elpis.label.material_status_filter' => 'Materiaalstatus',
+        'elpis.material_status.all' => 'Alle statussen',
+        'elpis.link.copy' => 'Kopieer link naar dit project',
+        'elpis.link.copied' => 'Link gekopieerd',
+        'elpis.link.copy_failed' => 'Kopiëren mislukt',
     ],
 
     'en' => [
@@ -110,6 +117,13 @@ const TRANSLATIONS = [
         'elpis.error.load_failed' => 'Failed to load data. Please try again later.',
         'elpis.loader.wait' => 'Please wait...',
         'elpis.loader.loading' => 'Fetching data from Business Central',
+        'elpis.btn.expand_all' => 'Expand all',
+        'elpis.btn.collapse_all' => 'Collapse all',
+        'elpis.label.material_status_filter' => 'Material status',
+        'elpis.material_status.all' => 'All statuses',
+        'elpis.link.copy' => 'Copy link to this project',
+        'elpis.link.copied' => 'Link copied',
+        'elpis.link.copy_failed' => 'Copy failed',
     ],
 
     'de' => [
@@ -153,6 +167,13 @@ const TRANSLATIONS = [
         'elpis.error.load_failed' => 'Daten konnten nicht geladen werden. Bitte später erneut versuchen.',
         'elpis.loader.wait' => 'Bitte warten...',
         'elpis.loader.loading' => 'Daten werden aus Business Central geladen',
+        'elpis.btn.expand_all' => 'Alle aufklappen',
+        'elpis.btn.collapse_all' => 'Alle zuklappen',
+        'elpis.label.material_status_filter' => 'Materialstatus',
+        'elpis.material_status.all' => 'Alle Statuswerte',
+        'elpis.link.copy' => 'Link zu diesem Projekt kopieren',
+        'elpis.link.copied' => 'Link kopiert',
+        'elpis.link.copy_failed' => 'Kopieren fehlgeschlagen',
     ],
 
     'fr' => [
@@ -196,6 +217,13 @@ const TRANSLATIONS = [
         'elpis.error.load_failed' => 'Échec du chargement des données. Réessayez plus tard.',
         'elpis.loader.wait' => 'Veuillez patienter...',
         'elpis.loader.loading' => 'Récupération des données depuis Business Central',
+        'elpis.btn.expand_all' => 'Tout déplier',
+        'elpis.btn.collapse_all' => 'Tout replier',
+        'elpis.label.material_status_filter' => 'Statut matériel',
+        'elpis.material_status.all' => 'Tous les statuts',
+        'elpis.link.copy' => 'Copier le lien vers ce projet',
+        'elpis.link.copied' => 'Lien copié',
+        'elpis.link.copy_failed' => 'Échec de la copie',
     ],
 ];
 
