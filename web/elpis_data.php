@@ -706,10 +706,11 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
     return $summary;
 }
 
-function elpis_line_search_blob(array $line): string
+function elpis_line_search_blob(array $line, string $projectNo = ''): string
 {
     $materialStatus = strtoupper(trim((string) ($line['material_status'] ?? '')));
     $parts = [
+        $projectNo,
         (string) ($line['job_task_no'] ?? ''),
         (string) ($line['item_no'] ?? ''),
         (string) ($line['description'] ?? ''),
@@ -736,7 +737,7 @@ function elpis_project_search_blob(array $project, array $lines): string
         if (!is_array($line)) {
             continue;
         }
-        $parts[] = elpis_line_search_blob($line);
+        $parts[] = elpis_line_search_blob($line, (string) ($project['no'] ?? ''));
     }
 
     return trim(implode(' ', array_filter($parts, static function (string $value): bool {

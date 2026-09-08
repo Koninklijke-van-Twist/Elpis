@@ -454,6 +454,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
         .elpis-project-item.is-filtered-out:not(.is-pinned) { display: none; }
         .elpis-project-item.is-pinned { display: block; }
         table.elpis-table tbody tr.is-filtered-out { display: none; }
+        table.elpis-table .elpis-col-project-no { display: none; }
         table.elpis-table thead th {
             background: linear-gradient(180deg, var(--kvt-perkins-blue) 0%, #0069b4 100%);
             color: #fff;
@@ -724,6 +725,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
                                         <table class="elpis-table" data-elpis-sortable-table>
                                             <thead>
                                                 <tr>
+                                                    <th class="elpis-col-project-no" aria-hidden="true"></th>
                                                     <th><button type="button" class="elpis-sort-btn" data-sort-key="workorder"><?= elpis_h(LOC('elpis.col.workorder')) ?></button></th>
                                                     <th><button type="button" class="elpis-sort-btn" data-sort-key="item"><?= elpis_h(LOC('elpis.col.item')) ?></button></th>
                                                     <th><button type="button" class="elpis-sort-btn" data-sort-key="description"><?= elpis_h(LOC('elpis.col.description')) ?></button></th>
@@ -752,7 +754,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
                                                     ?>
                                                     <tr
                                                         data-elpis-line-row
-                                                        data-search-text="<?= elpis_h(elpis_line_search_blob($line)) ?>"
+                                                        data-search-text="<?= elpis_h(elpis_line_search_blob($line, $projectNo)) ?>"
                                                         data-sort-workorder="<?= elpis_h(strtolower((string) ($line['job_task_no'] ?? ''))) ?>"
                                                         data-sort-item="<?= elpis_h(strtolower((string) ($line['item_no'] ?? ''))) ?>"
                                                         data-sort-description="<?= elpis_h(strtolower((string) ($line['description'] ?? ''))) ?>"
@@ -765,6 +767,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
                                                         data-material-status="<?= elpis_h((string) ($line['material_status'] ?? '')) ?>"
                                                         <?= $rowClasses !== [] ? ' class="' . elpis_h(implode(' ', $rowClasses)) . '"' : '' ?>
                                                     >
+                                                        <td class="elpis-col-project-no"><?= elpis_h($projectNo) ?></td>
                                                         <td><?= elpis_h((string) ($line['job_task_no'] ?? '')) ?></td>
                                                         <td><?= elpis_h((string) ($line['item_no'] ?? '')) ?></td>
                                                         <td><?= elpis_h((string) ($line['description'] ?? '')) ?></td>
