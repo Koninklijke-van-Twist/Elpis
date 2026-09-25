@@ -18,6 +18,8 @@ const ELPI_PROJECT_MANAGER_EMAIL_MAP = [
 const ELPI_DEFAULT_USER_EMAIL = 'localtester@kvt.nl';
 
 const ELPI_CACHE_TTL = 86400;
+/** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
+const ELPI_NIGHTLY_MAX_AGE = 14400;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 

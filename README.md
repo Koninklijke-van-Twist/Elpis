@@ -21,7 +21,7 @@ $mimirApi  = 'mimir_…';
 $mimirBase = 'https://sleutels.kvt.nl/mimir/api';
 ```
 
-With `$mimirApi` set, `$auth_list`, `$environment`, `$baseUrl` and `$auth` are unused for Business Central — OData fetches and company discovery go through Mímir (`max_age` from Elpis TTLs). User company/manager preferences (`elpis_company`, `elpis_managers_by_company`) are unchanged. The local odata file-cache widget is shown only on the non-Mímir path. Without `$mimirApi` the existing BC path remains unchanged.
+With `$mimirApi` set, `$auth_list`, `$environment`, `$baseUrl` and `$auth` are unused for Business Central — OData fetches and company discovery go through Mímir (`max_age` from Elpis TTLs; nightly warm uses `ELPI_NIGHTLY_MAX_AGE` = 14400, page/UI keeps `ELPI_CACHE_TTL` = 86400). User company/manager preferences (`elpis_company`, `elpis_managers_by_company`) are unchanged. The local odata file-cache widget is shown only on the non-Mímir path. Without `$mimirApi` the existing BC path remains unchanged.
 
 ## Lokaal draaien
 

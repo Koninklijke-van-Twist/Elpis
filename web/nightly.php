@@ -22,7 +22,7 @@ $startedAt = microtime(true);
 
 try {
     $cleared = elpis_clear_odata_cache();
-    $summary = elpis_warm_odata_cache(ELPI_CACHE_TTL);
+    $summary = elpis_warm_odata_cache(ELPI_NIGHTLY_MAX_AGE);
     $elapsed = round(microtime(true) - $startedAt, 1);
 
     echo "Elpis nightly cache refresh OK\n";
@@ -31,7 +31,7 @@ try {
     echo 'managers=' . (int) ($summary['managers'] ?? 0) . "\n";
     echo 'projects=' . (int) ($summary['projects'] ?? 0) . "\n";
     echo 'planning_line_projects=' . (int) ($summary['planning_line_projects'] ?? 0) . "\n";
-    echo 'ttl=' . ELPI_CACHE_TTL . "\n";
+    echo 'ttl=' . ELPI_NIGHTLY_MAX_AGE . "\n";
     echo 'elapsed_s=' . $elapsed . "\n";
 } catch (Throwable $error) {
     http_response_code(500);
