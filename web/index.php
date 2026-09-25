@@ -791,14 +791,16 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
         </section>
     <?php endif; ?>
 
-    <?= injectTimerHtml([
-        'statusUrl' => 'odata.php?action=cache_status',
-        'deleteUrl' => 'odata.php?action=cache_delete',
-        'clearUrl' => 'odata.php?action=cache_clear',
-        'title' => 'Cachebestanden',
-        'label' => 'Cache',
-        'css' => '{{root}} .odata-cache-widget{top:16px;right:16px;left:auto;} {{root}} .odata-cache-popout{top:64px;right:16px;left:auto;}',
-    ]) ?>
+    <?php if (!function_exists('odata_mimir_enabled') || !odata_mimir_enabled()): ?>
+        <?= injectTimerHtml([
+            'statusUrl' => 'odata.php?action=cache_status',
+            'deleteUrl' => 'odata.php?action=cache_delete',
+            'clearUrl' => 'odata.php?action=cache_clear',
+            'title' => 'Cachebestanden',
+            'label' => 'Cache',
+            'css' => '{{root}} .odata-cache-widget{top:16px;right:16px;left:auto;} {{root}} .odata-cache-popout{top:64px;right:16px;left:auto;}',
+        ]) ?>
+    <?php endif; ?>
 </div>
 
 <div id="elpis-loader-meta" hidden

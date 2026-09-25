@@ -157,8 +157,24 @@ function probe_summarize_row(array $row, array $fields): array
     return $out;
 }
 
+require_once __DIR__ . '/odata.php';
+
+// Live BC probe needs local BC credentials. With Mímir-only auth there is no $baseUrl/$auth_list.
+if (function_exists('odata_mimir_enabled') && odata_mimir_enabled()) {
+    $hasBc = isset($baseUrl) && is_string($baseUrl) && trim($baseUrl) !== ''
+        && isset($auth_list) && is_array($auth_list) && $auth_list !== [];
+    if (!$hasBc) {
+        fwrite(STDERR, "bc_probe is a direct-BC tool. With \$mimirApi set and no local BC auth, use Mímir UI or Elpis nightly instead.\n");
+        exit(2);
+    }
+}
+
 $environment = auth_get_primary_environment();
 $auth = auth_get_auth_for_environment($environment);
+if ($auth === [] || !isset($baseUrl) || !is_string($baseUrl) || trim($baseUrl) === '') {
+    fwrite(STDERR, "bc_probe: missing BC \$baseUrl / auth for environment.\n");
+    exit(2);
+}
 $companies = probe_fetch_companies($baseUrl, $environment, $auth);
 $company = (string) (getenv('BC_PROBE_COMPANY') ?: ($companies[0] ?? ''));
 

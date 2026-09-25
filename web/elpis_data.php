@@ -49,6 +49,11 @@ function elpis_company_entity_url(string $baseUrl, string $environment, string $
 
 function elpis_fetch_rows(string $company, string $entitySet, array $query, int $ttl = ELPI_CACHE_TTL): array
 {
+    // Mímir-modus: geen environment / auth / baseUrl nodig.
+    if (odata_mimir_enabled()) {
+        return odata_mimir_query($company, $entitySet, $query, $ttl === 0 ? 3600 : $ttl);
+    }
+
     global $baseUrl;
 
     $environment = auth_get_environment_for_company($company, $ttl);
@@ -79,10 +84,22 @@ function elpis_default_companies(): array
 function elpis_companies_for_page(int $ttl = ELPI_CACHE_TTL): array
 {
     try {
-        $result = auth_discover_companies_across_active_environments($ttl);
-        $companies = is_array($result['companies'] ?? null) ? $result['companies'] : [];
-        if ($companies !== []) {
-            return $companies;
+        if (odata_mimir_enabled()) {
+            $companies = odata_mimir_list_companies(null);
+            // Vul demeter_* globals / map voor eventuele callers.
+            try {
+                auth_discover_companies_across_active_environments($ttl);
+            } catch (Throwable $ignored) {
+            }
+            if ($companies !== []) {
+                return $companies;
+            }
+        } else {
+            $result = auth_discover_companies_across_active_environments($ttl);
+            $companies = is_array($result['companies'] ?? null) ? $result['companies'] : [];
+            if ($companies !== []) {
+                return $companies;
+            }
         }
     } catch (Throwable $ignored) {
     }
