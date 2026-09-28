@@ -498,7 +498,7 @@ function elpis_collect_projects_from_rows(array $rows): array
 function elpis_fetch_projects_for_company(string $company, int $ttl = ELPI_CACHE_TTL): array
 {
     $rows = elpis_try_fetch_rows($company, 'AppProjecten', [
-        '$select' => 'No,Description,Status,Project_Manager',
+        '$select' => 'No,Description,Project_Manager',
         '$filter' => "Project_Manager ne ''",
         '$orderby' => 'No desc',
         '$top' => '500',
@@ -533,7 +533,7 @@ function elpis_fetch_projects_for_manager(string $company, string $projectManage
 
 function elpis_planning_line_select_fields(): string
 {
-    return 'Job_No,Job_Task_No,Line_No,Type,No,Description,Quantity,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Purchase_Order_No,LVS_Completely_Received,KVT_Expected_Receipt_Date,KVT_Status_Material';
+    return 'Job_No,Job_Task_No,No,Description,Quantity,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Purchase_Order_No,LVS_Completely_Received,KVT_Expected_Receipt_Date,KVT_Status_Material';
 }
 
 function elpis_collect_planning_line_row(array $row, array &$lines): void
