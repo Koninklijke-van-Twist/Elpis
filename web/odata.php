@@ -471,8 +471,10 @@ function odata_bc_auth_for_url(string $url, array $passed): ?array
     if ($matched !== null) {
         return $matched;
     }
+    $primary = odata_bc_environment();
+    $isPrimary = $env !== null && $primary !== null && strcasecmp($env, $primary) === 0;
     $list = $GLOBALS['auth_list'] ?? null;
-    if ($env !== null && is_array($list) && $list !== []) {
+    if (!$isPrimary && $env !== null && is_array($list) && $list !== []) {
         throw new Exception('Geen auth-configuratie gevonden voor environment: ' . $env);
     }
     return odata_bc_auth_for_fallback($passed);

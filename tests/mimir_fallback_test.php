@@ -259,6 +259,37 @@ if (!$queryRejected) {
 if (count($calls) !== $callsBeforeReject || fallback_count() !== $loggedBeforeReject) {
     fail('ontbrekende environment-auth mag geen generieke credentials of extra log gebruiken');
 }
+
+$auth_list = ['Sandbox' => $sandboxAuth];
+$beforePrimary = count($calls);
+$primaryRows = odata_get_all(
+    "https://mimir.invalid/mimir/ODataV4/Company('Onbekend%20Bedrijf')/AppWerkorders?\$select=No",
+    $auth,
+    14
+);
+if (($primaryRows[0]['No'] ?? '') !== 'WO-1') {
+    fail('onbekend bedrijf op de primaire environment viel niet terug');
+}
+$primaryCall = $calls[$beforePrimary] ?? null;
+$expectedPrimaryUrl = "https://bc.example:7148/Production/ODataV4/Company('Onbekend%20Bedrijf')/AppWerkorders?\$select=No";
+if (!is_array($primaryCall) || $primaryCall['url'] !== $expectedPrimaryUrl || $primaryCall['user'] !== 'bcuser') {
+    fail('primaire environment zonder auth_list-key moet $auth gebruiken: ' . json_encode($primaryCall));
+}
+$beforePrimaryCase = count($calls);
+$primaryCaseRows = odata_get_all(
+    "https://mimir.invalid/production/ODataV4/Company('Onbekend%20Bedrijf')/AppWerkorders?\$select=No",
+    $auth,
+    14
+);
+if (($primaryCaseRows[0]['No'] ?? '') !== 'WO-1') {
+    fail('primaire environment met andere hoofdletters viel niet terug');
+}
+$primaryCaseCall = $calls[$beforePrimaryCase] ?? null;
+$expectedPrimaryCaseUrl = "https://bc.example:7148/production/ODataV4/Company('Onbekend%20Bedrijf')/AppWerkorders?\$select=No";
+if (!is_array($primaryCaseCall) || $primaryCaseCall['url'] !== $expectedPrimaryCaseUrl || $primaryCaseCall['user'] !== 'bcuser') {
+    fail('primaire environment is hoofdlettergevoelig geweigerd: ' . json_encode($primaryCaseCall));
+}
+
 $auth_list = [
     'Production' => $auth,
     'Sandbox' => $sandboxAuth,
