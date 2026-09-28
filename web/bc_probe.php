@@ -159,12 +159,14 @@ function probe_summarize_row(array $row, array $fields): array
 
 require_once __DIR__ . '/odata.php';
 
-// Live BC probe needs local BC credentials. With Mímir-only auth there is no $baseUrl/$auth_list.
+// Live BC probe talks to Business Central directly. Keep $baseUrl / $auth_list in
+// auth.php next to $mimirApi: the web app and nightly.php fall back to those
+// credentials when Mímir is down, and this probe needs them too.
 if (function_exists('odata_mimir_enabled') && odata_mimir_enabled()) {
     $hasBc = isset($baseUrl) && is_string($baseUrl) && trim($baseUrl) !== ''
         && isset($auth_list) && is_array($auth_list) && $auth_list !== [];
     if (!$hasBc) {
-        fwrite(STDERR, "bc_probe is a direct-BC tool. With \$mimirApi set and no local BC auth, use Mímir UI or Elpis nightly instead.\n");
+        fwrite(STDERR, "bc_probe is a direct-BC tool. Keep BC credentials in auth.php next to \$mimirApi.\n");
         exit(2);
     }
 }

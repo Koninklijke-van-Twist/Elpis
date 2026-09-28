@@ -791,7 +791,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
         </section>
     <?php endif; ?>
 
-    <?php if (!function_exists('odata_mimir_enabled') || !odata_mimir_enabled()): ?>
+    <?php if (!function_exists('odata_mimir_enabled') || !odata_mimir_enabled() || (function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open())): ?>
         <?= injectTimerHtml([
             'statusUrl' => 'odata.php?action=cache_status',
             'deleteUrl' => 'odata.php?action=cache_delete',
