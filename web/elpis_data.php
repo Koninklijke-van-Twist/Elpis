@@ -71,8 +71,6 @@ function elpis_fetch_rows(string $company, string $entitySet, array $query, int 
  */
 function elpis_fetch_rows_direct(string $company, string $entitySet, array $query, int $ttl = ELPI_CACHE_TTL): array
 {
-    global $baseUrl;
-
     $environment = auth_get_environment_for_company($company, $ttl);
     $auth = auth_get_auth_for_environment($environment);
     if (odata_mimir_enabled() && function_exists('odata_auth_is_usable') && !odata_auth_is_usable($auth) && function_exists('odata_bc_auth_for_fallback')) {
@@ -81,7 +79,12 @@ function elpis_fetch_rows_direct(string $company, string $entitySet, array $quer
             $auth = $resolved;
         }
     }
-    $url = elpis_company_entity_url($baseUrl, $environment, $company, $entitySet, $query);
+    $root = $GLOBALS['baseUrl'] ?? null;
+    if (!is_string($root) || trim($root) === '' || stripos($root, 'mimir.invalid') !== false) {
+        $alt = $GLOBALS['base'] ?? null;
+        $root = is_string($alt) ? $alt : '';
+    }
+    $url = elpis_company_entity_url($root, $environment, $company, $entitySet, $query);
 
     // Bij een open Mímir-circuit direct de oude OData-client, anders opnieuw Mímir in.
     if (odata_mimir_enabled() && function_exists('odata_get_all_direct')) {
