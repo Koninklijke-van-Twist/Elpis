@@ -147,9 +147,11 @@ if (($map['Hunter van Twist'] ?? '') !== 'Production' || ($map['KVT Gas'] ?? '')
 }
 
 $sandboxAuth = ['mode' => 'basic', 'user' => 'sandbox-user', 'pass' => 'sandbox-secret'];
+$myEnvAuth = ['mode' => 'basic', 'user' => 'myenv-user', 'pass' => 'myenv-secret'];
 $auth_list = [
     'Production' => $auth,
     'Sandbox' => $sandboxAuth,
+    'My Env' => $myEnvAuth,
 ];
 $GLOBALS['demeter_company_environment_map'] = [
     'Hunter van Twist' => 'Sandbox',
@@ -170,7 +172,7 @@ if (($spacedRows[0]['No'] ?? '') !== 'WO-1') {
 }
 $spacedCall = $calls[$beforeSpaced] ?? null;
 $expectedSpacedUrl = "https://bc.example:7148/My%20Env/ODataV4/Company('Koninklijke%20van%20Twist')/AppWerkorders?\$select=No";
-if (!is_array($spacedCall) || $spacedCall['url'] !== $expectedSpacedUrl) {
+if (!is_array($spacedCall) || $spacedCall['url'] !== $expectedSpacedUrl || $spacedCall['user'] !== 'myenv-user') {
     fail('environment-segment werd niet precies één keer geëncodeerd: ' . json_encode($spacedCall));
 }
 if (is_array($spacedCall) && strpos($spacedCall['url'], 'My%2520Env') !== false) {
@@ -222,6 +224,46 @@ if (!is_array($mimirSegmentCall) || $mimirSegmentCall['url'] !== $expectedMapped
 if (fallback_count() !== $loggedBeforeSecondEnv + 1) {
     fail('na het openen van het circuit mag niet opnieuw gelogd worden, log=' . fallback_log());
 }
+
+$auth_list = ['Production' => $auth];
+$callsBeforeReject = count($calls);
+$loggedBeforeReject = fallback_count();
+$rejectedUrl = false;
+try {
+    odata_get_all(
+        "https://mimir.invalid/Sandbox/ODataV4/Company('Hunter%20van%20Twist')/AppProjecten?\$select=No",
+        $auth,
+        11
+    );
+} catch (Throwable $exception) {
+    $rejectedUrl = true;
+    if ($exception->getMessage() !== 'Geen auth-configuratie gevonden voor environment: Sandbox') {
+        fail('ontbrekende Sandbox-auth gaf een andere fout: ' . $exception->getMessage());
+    }
+}
+if (!$rejectedUrl) {
+    fail('een geconfigureerde auth_list zonder Sandbox moet de aanroep weigeren');
+}
+$queryRejected = false;
+try {
+    odata_mimir_query('Hunter van Twist', 'AppProjecten', ['$select' => 'No'], 12);
+} catch (Throwable $exception) {
+    $queryRejected = true;
+    if (strpos($exception->getMessage(), 'Mímir') === false) {
+        fail('gemapt bedrijf zonder Sandbox-auth moet de Mímir-fout houden: ' . $exception->getMessage());
+    }
+}
+if (!$queryRejected) {
+    fail('gemapt bedrijf zonder named auth moet stoppen');
+}
+if (count($calls) !== $callsBeforeReject || fallback_count() !== $loggedBeforeReject) {
+    fail('ontbrekende environment-auth mag geen generieke credentials of extra log gebruiken');
+}
+$auth_list = [
+    'Production' => $auth,
+    'Sandbox' => $sandboxAuth,
+    'My Env' => $myEnvAuth,
+];
 
 $cacheUrl = "https://mimir.invalid/mimir/ODataV4/Company('Hunter%20van%20Twist')/AppWerkorders";
 $cacheKey = build_cache_key($cacheUrl, $sandboxAuth);
@@ -381,6 +423,30 @@ PHP
 $GLOBALS['ELPIS_AUTH_PHP_PATH'] = $authFile;
 $GLOBALS['ELPIS_AUTH_PHP_INCLUDED'] = [];
 $GLOBALS['baseUrl'] = 'https://already.example:7148/';
+$GLOBALS['environment'] = 'Production';
+$GLOBALS['auth'] = ['mode' => 'basic', 'user' => 'kept-user', 'pass' => 'kept-secret'];
+unset($GLOBALS['auth_list'], $GLOBALS['base']);
+odata_bc_ensure_config_loaded();
+$filledList = (static function (): array {
+    global $baseUrl, $environment, $auth, $auth_list;
+    return [
+        'baseUrl' => $baseUrl ?? null,
+        'environment' => $environment ?? null,
+        'user' => is_array($auth) ? (string) ($auth['user'] ?? '') : '',
+        'listUser' => (isset($auth_list['Sandbox']) && is_array($auth_list['Sandbox']))
+            ? (string) ($auth_list['Sandbox']['user'] ?? '')
+            : '',
+    ];
+})();
+if ($filledList['baseUrl'] !== 'https://already.example:7148/'
+    || $filledList['environment'] !== 'Production'
+    || $filledList['user'] !== 'kept-user'
+    || $filledList['listUser'] !== 'file-user') {
+    fail('auth.php moet auth_list aanvullen zonder gezette credentials te overschrijven: ' . json_encode($filledList));
+}
+
+$GLOBALS['ELPIS_AUTH_PHP_INCLUDED'] = [];
+$GLOBALS['baseUrl'] = 'https://already.example:7148/';
 $GLOBALS['environment'] = 'mimir';
 unset($GLOBALS['auth'], $GLOBALS['auth_list'], $GLOBALS['base']);
 odata_bc_ensure_config_loaded();
@@ -427,7 +493,7 @@ if ($afterRequireOnce['baseUrl'] !== 'https://from-file.example:7148/'
     || $afterRequireOnce['user'] !== 'file-user') {
     fail('require_once na de kopie wist de globals: ' . json_encode($afterRequireOnce));
 }
-if (strpos(fallback_log(), 'sandbox-secret') !== false || strpos(fallback_log(), 'file-secret') !== false || strpos(fallback_log(), 'bc-secret') !== false) {
+if (strpos(fallback_log(), 'sandbox-secret') !== false || strpos(fallback_log(), 'file-secret') !== false || strpos(fallback_log(), 'bc-secret') !== false || strpos(fallback_log(), 'myenv-secret') !== false || strpos(fallback_log(), 'kept-secret') !== false) {
     fail('log bevat een geheim');
 }
 @unlink($authFile);

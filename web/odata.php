@@ -207,11 +207,19 @@ function odata_bc_global_is_placeholder(string $name): bool
  * Een require binnen een functie maakt anders alleen lokale variabelen.
  * Al gezette, bruikbare waarden blijven staan.
  */
+function odata_bc_php_file_is_included(string $path): bool
+{
+    $real = realpath($path);
+    foreach (get_included_files() as $includedPath) {
+        if ($includedPath === $path || ($real !== false && $includedPath === $real)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function odata_bc_ensure_config_loaded(): void
 {
-    if (odata_bc_credentials_configured_from_globals()) {
-        return;
-    }
     $path = odata_bc_auth_php_path();
     if (!is_file($path)) {
         return;
@@ -220,6 +228,13 @@ function odata_bc_ensure_config_loaded(): void
         $GLOBALS['ELPIS_AUTH_PHP_INCLUDED'] = [];
     }
     if (!empty($GLOBALS['ELPIS_AUTH_PHP_INCLUDED'][$path])) {
+        return;
+    }
+    // Een top-level require heeft $auth_list al globaal gezet. Niet opnieuw laden:
+    // auth.php kan dan functies herdeclareren. Ontbreekt $auth_list nog, dan alsnog
+    // laden zodat een generieke $auth de environment-specifieke lijst niet verbergt.
+    if (odata_bc_php_file_is_included($path) && !odata_bc_global_is_placeholder('auth_list')) {
+        $GLOBALS['ELPIS_AUTH_PHP_INCLUDED'][$path] = true;
         return;
     }
     $loaded = (static function (string $authPath): array {
@@ -456,6 +471,10 @@ function odata_bc_auth_for_url(string $url, array $passed): ?array
     if ($matched !== null) {
         return $matched;
     }
+    $list = $GLOBALS['auth_list'] ?? null;
+    if ($env !== null && is_array($list) && $list !== []) {
+        throw new Exception('Geen auth-configuratie gevonden voor environment: ' . $env);
+    }
     return odata_bc_auth_for_fallback($passed);
 }
 
@@ -684,7 +703,7 @@ function odata_direct_companies_as_rows(?string $environmentFilter = null): arra
     $out = [];
     foreach ($envs as $env) {
         $auth = odata_bc_auth_for_named_environment($env);
-        if ($auth === null) {
+        if ($auth === null && odata_bc_global_is_placeholder('auth_list')) {
             $auth = odata_bc_auth_for_fallback([]);
         }
         if ($auth === null) {
@@ -827,12 +846,13 @@ function odata_direct_query(string $company, string $table, array $odataQuery, i
 {
     odata_bc_ensure_config_loaded();
     $env = odata_bc_environment_for_company($company);
+    $mapped = $env !== null;
     if ($env === null) {
         $env = odata_bc_environment();
     }
     $base = odata_bc_base_url();
     $auth = odata_bc_auth_for_named_environment($env);
-    if ($auth === null) {
+    if ($auth === null && !$mapped) {
         $auth = odata_bc_auth_for_fallback([]);
     }
     if ($env === null || $base === null || $auth === null) {
