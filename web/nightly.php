@@ -3,7 +3,7 @@
 /**
  * Includes/requires
  */
-require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/auth.php'; // $mimirApi én BC-credentials ($baseUrl, $auth_list, $environment) voor de directe fallback
 require_once __DIR__ . '/localization.php';
 require_once __DIR__ . '/auth_helper.php';
 require_once __DIR__ . '/elpis_data.php';

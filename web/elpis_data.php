@@ -51,16 +51,42 @@ function elpis_company_entity_url(string $baseUrl, string $environment, string $
 
 function elpis_fetch_rows(string $company, string $entitySet, array $query, int $ttl = ELPI_CACHE_TTL): array
 {
-    // Mímir-modus: geen environment / auth / baseUrl nodig.
     if (odata_mimir_enabled()) {
-        return odata_mimir_query($company, $entitySet, $query, $ttl === 0 ? 3600 : $ttl);
+        $ttlForMimir = $ttl === 0 ? 3600 : $ttl;
+        return odata_mimir_or_direct(
+            static function () use ($company, $entitySet, $query, $ttlForMimir): array {
+                return odata_mimir_query_impl($company, $entitySet, $query, $ttlForMimir);
+            },
+            static function () use ($company, $entitySet, $query, $ttl): array {
+                return elpis_fetch_rows_direct($company, $entitySet, $query, $ttl);
+            }
+        );
     }
 
+    return elpis_fetch_rows_direct($company, $entitySet, $query, $ttl);
+}
+
+/**
+ * Pre-Mímir pad: environment + auth uit auth.php, company-URL en lokale filecache.
+ */
+function elpis_fetch_rows_direct(string $company, string $entitySet, array $query, int $ttl = ELPI_CACHE_TTL): array
+{
     global $baseUrl;
 
     $environment = auth_get_environment_for_company($company, $ttl);
     $auth = auth_get_auth_for_environment($environment);
+    if (odata_mimir_enabled() && function_exists('odata_auth_is_usable') && !odata_auth_is_usable($auth) && function_exists('odata_bc_auth_for_fallback')) {
+        $resolved = odata_bc_auth_for_fallback([]);
+        if (is_array($resolved)) {
+            $auth = $resolved;
+        }
+    }
     $url = elpis_company_entity_url($baseUrl, $environment, $company, $entitySet, $query);
+
+    // Bij een open Mímir-circuit direct de oude OData-client, anders opnieuw Mímir in.
+    if (odata_mimir_enabled() && function_exists('odata_get_all_direct')) {
+        return odata_get_all_direct($url, $auth, $ttl);
+    }
 
     return odata_get_all($url, $auth, $ttl);
 }
@@ -87,6 +113,7 @@ function elpis_companies_for_page(int $ttl = ELPI_CACHE_TTL): array
 {
     try {
         if (odata_mimir_enabled()) {
+            // Bij een Mímir-fout haalt list_companies dezelfde namen via directe BC OData op.
             $companies = odata_mimir_list_companies(null);
             // Vul demeter_* globals / map voor eventuele callers.
             try {
