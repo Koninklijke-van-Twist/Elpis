@@ -140,16 +140,30 @@ function auth_get_auth_for_environment(string $environment): array
     }
 
     $auth = $list[$environmentKey] ?? null;
-    if (!is_array($auth)) {
-        // Mímir-modus zonder BC-auth: leftover callers krijgen lege auth i.p.v. exception.
-        // Na een Mímir-storing wel de echte BC-auth eisen, zodat de directe route kan draaien.
-        if ($mimirStillServing) {
-            return [];
-        }
-        throw new RuntimeException('Geen auth-configuratie gevonden voor environment: ' . $environmentKey);
+    if (is_array($auth)) {
+        return $auth;
     }
 
-    return $auth;
+    // Mímir-modus zonder BC-auth: leftover callers krijgen lege auth i.p.v. exception.
+    // Na een Mímir-storing: auth_list-entry, anders $auth voor de primaire environment
+    // of een lege lijst. Een andere environment houdt de oorspronkelijke Mímir-fout.
+    if ($mimirStillServing) {
+        return [];
+    }
+    if (function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open()
+        && function_exists('odata_bc_auth_for_direct')) {
+        $resolved = odata_bc_auth_for_direct($environmentKey);
+        if (is_array($resolved)) {
+            return $resolved;
+        }
+        if (function_exists('odata_mimir_last_error')) {
+            $previous = odata_mimir_last_error();
+            if ($previous instanceof Throwable) {
+                throw $previous;
+            }
+        }
+    }
+    throw new RuntimeException('Geen auth-configuratie gevonden voor environment: ' . $environmentKey);
 }
 
 /**
@@ -170,14 +184,15 @@ function auth_get_environment_key_fragment(): string
  */
 function auth_build_companies_urls(string $environment): array
 {
-    global $baseUrl;
-
-    $base = trim((string) ($baseUrl ?? ''));
-    if ($base === '') {
+    $root = trim((string) ($GLOBALS['baseUrl'] ?? ''));
+    if ($root === '' || stripos($root, 'mimir.invalid') !== false) {
+        $root = trim((string) ($GLOBALS['base'] ?? ''));
+    }
+    if ($root === '' || stripos($root, 'mimir.invalid') !== false) {
         throw new RuntimeException('baseUrl ontbreekt in auth-configuratie.');
     }
 
-    $prefix = rtrim($base, '/') . '/' . rawurlencode($environment) . '/ODataV4/';
+    $prefix = rtrim($root, '/') . '/' . rawurlencode($environment) . '/ODataV4/';
 
     return [
         $prefix . 'Companies?$select=Name',
@@ -604,6 +619,12 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
             if (isset($list[$targetEnvironment]) && is_array($list[$targetEnvironment])) {
                 $targetAuth = $list[$targetEnvironment];
             }
+        }
+
+        // Lege sentinel laten staan voor callers zolang Mímir serveert, maar de
+        // oorspronkelijke $auth bewaren: die heeft de directe fallback nog nodig.
+        if (function_exists('odata_bc_preserve_auth_for_fallback')) {
+            odata_bc_preserve_auth_for_fallback($auth);
         }
 
         $environment = $targetEnvironment;

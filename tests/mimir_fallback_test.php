@@ -437,6 +437,187 @@ if (($directRows[0]['No'] ?? '') !== 'WO-1' || !is_array($directCall) || $direct
     fail('lege $mimirApi moet de oude directe route ongewijzigd gebruiken: ' . json_encode($directCall));
 }
 
+// Alleen $auth, zonder $auth_list: query, URL-fetch en companylijst gebruiken $auth.
+odata_mimir_circuit_reset();
+$mimirApi = 'mimir_test_key_should_not_leak';
+$mimirBase = 'http://127.0.0.1:9';
+$baseUrl = 'https://bc.example:7148/';
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'bcuser', 'pass' => 'bc-secret'];
+unset($auth_list, $GLOBALS['auth_list'], $GLOBALS['demeter_company_environment_map'], $GLOBALS['elpis_bc_auth_preserved']);
+
+$beforeOnlyAuthQuery = count($calls);
+$onlyAuthQuery = odata_mimir_query('KVT Gas', 'AppResource', ['$select' => 'No'], 60);
+$onlyAuthQueryCall = $calls[$beforeOnlyAuthQuery] ?? null;
+if (($onlyAuthQuery[0]['No'] ?? '') !== 'WO-1'
+    || !is_array($onlyAuthQueryCall)
+    || $onlyAuthQueryCall['user'] !== 'bcuser'
+    || strpos((string) $onlyAuthQueryCall['url'], "https://bc.example:7148/Production/ODataV4/Company('KVT%20Gas')/AppResource?") !== 0) {
+    fail('alleen $auth: query ging niet naar BC met $auth: ' . json_encode($onlyAuthQueryCall));
+}
+
+$beforeOnlyAuthFetch = count($calls);
+$onlyAuthFetch = odata_mimir_fetch_all(
+    "https://mimir.invalid/Production/ODataV4/Company('KVT%20Gas')/AppWerkorders?\$select=No",
+    15
+);
+$onlyAuthFetchCall = $calls[$beforeOnlyAuthFetch] ?? null;
+if (($onlyAuthFetch[0]['No'] ?? '') !== 'WO-1'
+    || !is_array($onlyAuthFetchCall)
+    || $onlyAuthFetchCall['user'] !== 'bcuser'
+    || $onlyAuthFetchCall['url'] !== "https://bc.example:7148/Production/ODataV4/Company('KVT%20Gas')/AppWerkorders?\$select=No") {
+    fail('alleen $auth: URL-fetch ging niet naar BC met $auth: ' . json_encode($onlyAuthFetchCall));
+}
+
+$beforeOnlyAuthCompanies = count($calls);
+odata_direct_companies_as_rows(null);
+$onlyAuthCompanyCall = $calls[$beforeOnlyAuthCompanies] ?? null;
+if (!is_array($onlyAuthCompanyCall)
+    || strpos((string) $onlyAuthCompanyCall['url'], 'https://bc.example:7148/Production/ODataV4/Company') !== 0
+    || $onlyAuthCompanyCall['user'] !== 'bcuser'
+    || count($calls) !== $beforeOnlyAuthCompanies + 1) {
+    fail('alleen $auth: companylijst ging niet naar de primaire environment met $auth: ' . json_encode(array_slice($calls, $beforeOnlyAuthCompanies)));
+}
+if ((auth_get_auth_for_environment('Production')['user'] ?? '') !== 'bcuser'
+    || (auth_get_auth_for_environment('Sandbox')['user'] ?? '') !== 'bcuser') {
+    fail('lege auth_list moet tijdens fallback overal $auth gebruiken');
+}
+unset(
+    $GLOBALS['demeter_company_environment_map'],
+    $GLOBALS['demeter_companies_by_environment'],
+    $GLOBALS['demeter_active_environments']
+);
+$beforeElpisOnlyAuth = count($calls);
+$elpisOnlyAuth = elpis_fetch_rows('KVT Gas', 'AppProjecten', ['$select' => 'No'], 30);
+$sawElpisOnlyAuth = false;
+for ($i = $beforeElpisOnlyAuth; $i < count($calls); $i++) {
+    $url = (string) ($calls[$i]['url'] ?? '');
+    if (strpos($url, "https://bc.example:7148/Production/ODataV4/Company('KVT%20Gas')/AppProjecten?") === 0
+        && ($calls[$i]['user'] ?? '') === 'bcuser') {
+        $sawElpisOnlyAuth = true;
+    }
+}
+if (($elpisOnlyAuth[0]['No'] ?? '') !== 'WO-1' || !$sawElpisOnlyAuth) {
+    fail('elpis_fetch_rows met alleen $auth viel niet terug op BC: ' . json_encode(array_slice($calls, $beforeElpisOnlyAuth)));
+}
+
+$savedBaseUrl = $baseUrl;
+unset($GLOBALS['baseUrl']);
+$base = 'https://bc.example:7148/';
+$beforeBaseOnly = count($calls);
+odata_direct_companies_as_rows(null);
+$baseOnlyCall = $calls[$beforeBaseOnly] ?? null;
+$baseUrl = $savedBaseUrl;
+$GLOBALS['baseUrl'] = $savedBaseUrl;
+unset($base, $GLOBALS['base']);
+if (!is_array($baseOnlyCall)
+    || strpos((string) $baseOnlyCall['url'], 'https://bc.example:7148/Production/ODataV4/Company') !== 0
+    || $baseOnlyCall['user'] !== 'bcuser') {
+    fail('companylijst zonder baseUrl moet $base + environment gebruiken: ' . json_encode($baseOnlyCall));
+}
+
+// auth_list bevat alleen Sandbox; primaire environment Production. Ongemapt bedrijf via $auth.
+odata_mimir_circuit_reset();
+$mimirBase = 'http://127.0.0.1:9';
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'bcuser', 'pass' => 'bc-secret'];
+$auth_list = ['Sandbox' => $sandboxAuth];
+unset($GLOBALS['demeter_company_environment_map'], $GLOBALS['elpis_bc_auth_preserved']);
+$beforeUnmapped = count($calls);
+$unmappedRows = odata_mimir_query('Onbekend Bedrijf', 'AppWerkorders', ['$select' => 'No'], 16);
+$unmappedCall = $calls[$beforeUnmapped] ?? null;
+if (($unmappedRows[0]['No'] ?? '') !== 'WO-1'
+    || !is_array($unmappedCall)
+    || strpos((string) $unmappedCall['url'], "https://bc.example:7148/Production/ODataV4/Company('Onbekend%20Bedrijf')/AppWerkorders?") !== 0
+    || $unmappedCall['user'] !== 'bcuser') {
+    fail('unmapped bedrijf op Production moet $auth gebruiken: ' . json_encode($unmappedCall));
+}
+
+$GLOBALS['demeter_company_environment_map'] = ['KVT Gas' => 'Production'];
+$beforeMappedPrimary = count($calls);
+$mappedPrimaryRows = odata_mimir_query('KVT Gas', 'AppProjecten', ['$select' => 'No'], 17);
+$mappedPrimaryCall = $calls[$beforeMappedPrimary] ?? null;
+if (($mappedPrimaryRows[0]['No'] ?? '') !== 'WO-1'
+    || !is_array($mappedPrimaryCall)
+    || strpos((string) $mappedPrimaryCall['url'], "https://bc.example:7148/Production/ODataV4/Company('KVT%20Gas')/AppProjecten?") !== 0
+    || $mappedPrimaryCall['user'] !== 'bcuser') {
+    fail('bedrijf op de primaire environment zonder auth_list-entry moet $auth gebruiken: ' . json_encode($mappedPrimaryCall));
+}
+
+$beforePrimaryFilter = count($calls);
+odata_direct_companies_as_rows('production');
+$primaryFilterCall = $calls[$beforePrimaryFilter] ?? null;
+if (!is_array($primaryFilterCall)
+    || strpos((string) $primaryFilterCall['url'], 'https://bc.example:7148/production/ODataV4/Company') !== 0
+    || $primaryFilterCall['user'] !== 'bcuser') {
+    fail('companylijst-filter gelijk aan de primaire environment moet $auth gebruiken: ' . json_encode($primaryFilterCall));
+}
+
+// Context in Mímir-modus mag $auth niet wissen voor de latere fallback.
+odata_mimir_circuit_reset();
+$mimirBase = 'http://127.0.0.1:9';
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'bcuser', 'pass' => 'bc-secret'];
+$auth_list = ['Sandbox' => $sandboxAuth];
+unset($GLOBALS['elpis_bc_auth_preserved']);
+$GLOBALS['demeter_company_environment_map'] = ['KVT Gas' => 'Production'];
+$context = auth_set_current_company_context('KVT Gas');
+if (($context['auth'] ?? null) !== [] || ($GLOBALS['auth'] ?? null) !== []) {
+    fail('Mímir-context zonder auth_list-entry moet lege auth teruggeven');
+}
+if (odata_mimir_circuit_open()) {
+    fail('context met een bestaande map mag Mímir niet raken');
+}
+if (auth_get_auth_for_environment('Production') !== []) {
+    fail('tijdens Mímir moet een ontbrekende auth_list-entry leeg blijven');
+}
+$beforeContextQuery = count($calls);
+$contextRows = odata_mimir_query('KVT Gas', 'AppProjecten', ['$select' => 'No'], 18);
+$contextCall = $calls[$beforeContextQuery] ?? null;
+if (($contextRows[0]['No'] ?? '') !== 'WO-1'
+    || !is_array($contextCall)
+    || $contextCall['user'] !== 'bcuser') {
+    fail('fallback na context-wipe moet de oorspronkelijke $auth gebruiken: ' . json_encode($contextCall));
+}
+
+// auth_list bevat alleen Production; een Sandbox-URL weigert zonder BC-call.
+odata_mimir_circuit_reset();
+$mimirBase = 'http://127.0.0.1:9';
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'bcuser', 'pass' => 'bc-secret'];
+$auth_list = ['Production' => $auth];
+unset($GLOBALS['demeter_company_environment_map'], $GLOBALS['elpis_bc_auth_preserved']);
+$callsBeforeSandboxUrl = count($calls);
+$sandboxUrlRefused = false;
+try {
+    odata_get_all(
+        "https://mimir.invalid/Sandbox/ODataV4/Company('Hunter%20van%20Twist')/AppProjecten?\$select=No",
+        $auth,
+        11
+    );
+} catch (Throwable $exception) {
+    $sandboxUrlRefused = true;
+    if ($exception->getMessage() !== 'Geen auth-configuratie gevonden voor environment: Sandbox') {
+        fail('Sandbox-URL zonder entry gaf een andere fout: ' . $exception->getMessage());
+    }
+}
+if (!$sandboxUrlRefused) {
+    fail('Sandbox-URL moet weigeren als alleen Production in auth_list staat');
+}
+if (count($calls) !== $callsBeforeSandboxUrl) {
+    fail('Sandbox-URL zonder entry mag geen BC-call doen');
+}
+$callsBeforeSandboxCompanies = count($calls);
+$sandboxCompanies = odata_direct_companies_as_rows('Sandbox');
+if ($sandboxCompanies !== [] || count($calls) !== $callsBeforeSandboxCompanies) {
+    fail('companylijst voor Sandbox zonder entry mag geen BC-call doen');
+}
+
+unset($GLOBALS['elpis_bc_auth_preserved'], $GLOBALS['demeter_company_environment_map']);
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'bcuser', 'pass' => 'bc-secret'];
+$auth_list = ['Production' => $auth];
+
 $authFile = sys_get_temp_dir() . '/elpis-auth-globals-' . getmypid() . '.php';
 file_put_contents($authFile, <<<'PHP'
 <?php
