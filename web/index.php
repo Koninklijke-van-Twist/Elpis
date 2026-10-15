@@ -214,7 +214,10 @@ try {
 
     if ($projectManager !== '' && !$deferProjectsLoad) {
         $projects = elpis_fetch_projects_for_manager($company, $projectManager);
-        $allLinesByProject = elpis_fetch_planning_lines_for_company($company);
+        $allLinesByProject = elpis_enrich_planning_lines_with_receipts(
+            $company,
+            elpis_fetch_planning_lines_for_company($company)
+        );
         foreach ($projects as $project) {
             $projectNo = (string) ($project['no'] ?? '');
             if ($projectNo === '') {
@@ -378,7 +381,25 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
             background: linear-gradient(90deg, #e8f4fc 0%, #f7fbff 100%);
             border-left: 4px solid var(--kvt-main-blue);
         }
+        .elpis-project-heading { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
         .elpis-project-title { font-weight: 700; color: var(--kvt-perkins-blue); }
+        .elpis-execution-from {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            align-items: baseline;
+            max-width: 100%;
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: #e8f8ee;
+            color: #0f6b3c;
+            font-size: 0.82rem;
+            font-weight: 700;
+            line-height: 1.35;
+        }
+        .elpis-execution-from.is-missing { background: #fff4e5; color: #8a4b08; }
+        .elpis-receipt--stock { color: #0f6b3c; font-weight: 700; }
+        .elpis-receipt--missing { color: #8a4b08; font-weight: 700; }
         .elpis-project-chevron { color: var(--kvt-main-blue); font-size: 1.2rem; transition: transform 0.2s ease; }
         .elpis-project-item.is-open .elpis-project-chevron { transform: rotate(90deg); }
         .elpis-project-item--empty:not(.is-open) {
@@ -687,10 +708,22 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
                         >
                             <div class="elpis-project-header">
                                 <button type="button" class="elpis-project-toggle" data-elpis-project-toggle aria-expanded="<?= $isOpen ? 'true' : 'false' ?>">
-                                    <span>
-                                        <span class="elpis-project-title"><?= elpis_h($projectNo) ?></span>
-                                        <?php if (trim((string) ($project['description'] ?? '')) !== ''): ?>
-                                            <span> — <?= elpis_h((string) $project['description']) ?></span>
+                                    <?php
+                                    $executionSummary = elpis_project_execution_summary($projectLines);
+                                    $executionValue = elpis_project_execution_value($executionSummary);
+                                    ?>
+                                    <span class="elpis-project-heading">
+                                        <span>
+                                            <span class="elpis-project-title"><?= elpis_h($projectNo) ?></span>
+                                            <?php if (trim((string) ($project['description'] ?? '')) !== ''): ?>
+                                                <span> — <?= elpis_h((string) $project['description']) ?></span>
+                                            <?php endif; ?>
+                                        </span>
+                                        <?php if ($executionValue !== ''): ?>
+                                            <span class="elpis-execution-from<?= $executionSummary['state'] === 'missing' ? ' is-missing' : '' ?>">
+                                                <span><?= elpis_h(LOC('elpis.summary.execution_from')) ?></span>
+                                                <span><?= elpis_h($executionValue) ?></span>
+                                            </span>
                                         <?php endif; ?>
                                     </span>
                                     <span class="elpis-project-chevron" aria-hidden="true">›</span>
@@ -749,6 +782,13 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
                                                         $materialStatusLabel = elpis_material_status_label((string) $line['material_status']);
                                                     }
                                                     $expectedReceiptDisplay = elpis_line_expected_receipt_display($line);
+                                                    $receiptState = (string) ($line['receipt_state'] ?? '');
+                                                    $receiptClass = '';
+                                                    if ($receiptState === 'missing' || $receiptState === 'uncovered') {
+                                                        $receiptClass = 'elpis-receipt--missing';
+                                                    } elseif ($receiptState === 'on_stock' || $receiptState === 'partial') {
+                                                        $receiptClass = 'elpis-receipt--stock';
+                                                    }
                                                     $rowClass = elpis_line_row_class($qtyToOrder, $qtyOrdered, $qtyReceived, $qtyOpen);
                                                     $rowClasses = array_filter([$rowClass]);
                                                     ?>
@@ -763,7 +803,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
                                                         data-sort-ordered="<?= elpis_h((string) $qtyOrdered) ?>"
                                                         data-sort-open="<?= elpis_h((string) $qtyOpen) ?>"
                                                         data-sort-received="<?= elpis_h((string) $qtyReceived) ?>"
-                                                        data-sort-expected_receipt="<?= elpis_h((string) ($line['expected_receipt_date'] ?? '')) ?>"
+                                                        data-sort-expected_receipt="<?= elpis_h(elpis_receipt_sort_value($line)) ?>"
                                                         data-material-status="<?= elpis_h((string) ($line['material_status'] ?? '')) ?>"
                                                         <?= $rowClasses !== [] ? ' class="' . elpis_h(implode(' ', $rowClasses)) . '"' : '' ?>
                                                     >
@@ -776,7 +816,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
                                                         <td class="num"><?= elpis_h(elpis_format_qty($qtyOrdered)) ?></td>
                                                         <td class="num"><?= elpis_h(elpis_format_qty($qtyOpen)) ?></td>
                                                         <td class="num"><?= elpis_h(elpis_format_qty($qtyReceived)) ?></td>
-                                                        <td class="date"><?= elpis_h($expectedReceiptDisplay) ?></td>
+                                                        <td class="date<?= $receiptClass !== '' ? ' ' . elpis_h($receiptClass) : '' ?>"><?= elpis_h($expectedReceiptDisplay) ?></td>
                                                     </tr>
                                                 <?php endforeach; ?>
                                             </tbody>
@@ -825,6 +865,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
     }
 
     var timer = null;
+    var inventoryExpanded = false;
 
     function showLoader() {
         loader.classList.add('is-visible');
@@ -880,9 +921,37 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
         }
 
         stepsGrid.innerHTML = '';
+        inventoryExpanded = false;
         stepIds.forEach(function (stepId) {
             addStepSlot(stepId);
         });
+    }
+
+    function markInventoryProgress(done, total) {
+        done = parseInt(done, 10) || 0;
+        total = parseInt(total, 10) || 0;
+        if (!stepsGrid || total <= 1) {
+            if (done > 0) {
+                markStepDone('inventory');
+            }
+            return;
+        }
+
+        if (!inventoryExpanded) {
+            var single = stepsGrid.querySelector('[data-step-id="inventory"]');
+            if (single) {
+                single.remove();
+            }
+            inventoryExpanded = true;
+        }
+
+        var index;
+        for (index = 1; index <= total; index += 1) {
+            addStepSlot('inventory-' + index);
+        }
+        for (index = 1; index <= done && index <= total; index += 1) {
+            markStepDone('inventory-' + index);
+        }
     }
 
     function markStepDone(stepId) {
@@ -920,7 +989,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
         var stepIds = ['managers'];
 
         if (!url.searchParams.has('reload_managers')) {
-            stepIds.push('projects', 'lines');
+            stepIds.push('projects', 'lines', 'reservations', 'purchase', 'inventory');
         }
 
         return stepIds;
@@ -933,6 +1002,14 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
     function handleProgressEvent(eventData) {
         if (eventData.error) {
             throw new Error('progress failed');
+        }
+
+        if (eventData.step === 'inventory' && (eventData.status === 'progress' || eventData.status === 'done')) {
+            markInventoryProgress(eventData.done, eventData.total);
+            if (eventData.status === 'done' && !inventoryExpanded) {
+                markStepDone('inventory');
+            }
+            return;
         }
 
         if (eventData.status === 'done' && eventData.step) {

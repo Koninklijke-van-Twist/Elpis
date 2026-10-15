@@ -120,8 +120,24 @@ try {
     elpis_progress_emit(['step' => 'projects', 'status' => 'done']);
 
     elpis_progress_emit(['step' => 'lines', 'status' => 'start']);
-    elpis_fetch_planning_lines_for_company($company);
+    $linesByProject = elpis_fetch_planning_lines_for_company($company);
     elpis_progress_emit(['step' => 'lines', 'status' => 'done']);
+
+    elpis_progress_emit(['step' => 'reservations', 'status' => 'start']);
+    elpis_fetch_reservation_entries($company);
+    elpis_progress_emit(['step' => 'reservations', 'status' => 'done']);
+
+    elpis_progress_emit(['step' => 'purchase', 'status' => 'start']);
+    elpis_fetch_open_purchase_order_lines($company);
+    elpis_progress_emit(['step' => 'purchase', 'status' => 'done']);
+
+    $inventoryItems = elpis_collect_stock_item_nos($linesByProject);
+    $inventoryChunks = elpis_item_inventory_chunk_count($inventoryItems);
+    elpis_progress_emit(['step' => 'inventory', 'status' => 'start', 'done' => 0, 'total' => $inventoryChunks]);
+    elpis_fetch_item_inventory($company, $inventoryItems, ELPI_CACHE_TTL, static function (int $done, int $total): void {
+        elpis_progress_emit(['step' => 'inventory', 'status' => 'progress', 'done' => $done, 'total' => $total]);
+    });
+    elpis_progress_emit(['step' => 'inventory', 'status' => 'done', 'done' => $inventoryChunks, 'total' => $inventoryChunks]);
 
     if ($company !== '') {
         elpis_save_dropdown_prefs($userEmail, $company, $projectManager);

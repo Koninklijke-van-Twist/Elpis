@@ -31,6 +31,9 @@ try {
     echo 'managers=' . (int) ($summary['managers'] ?? 0) . "\n";
     echo 'projects=' . (int) ($summary['projects'] ?? 0) . "\n";
     echo 'planning_line_projects=' . (int) ($summary['planning_line_projects'] ?? 0) . "\n";
+    echo 'reservation_entries=' . (int) ($summary['reservation_entries'] ?? 0) . "\n";
+    echo 'purchase_order_lines=' . (int) ($summary['purchase_order_lines'] ?? 0) . "\n";
+    echo 'item_inventory=' . (int) ($summary['item_inventory'] ?? 0) . "\n";
     echo 'ttl=' . ELPI_NIGHTLY_MAX_AGE . "\n";
     echo 'elapsed_s=' . $elapsed . "\n";
 } catch (Throwable $error) {
