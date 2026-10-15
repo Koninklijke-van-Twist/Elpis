@@ -784,7 +784,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
                                                     $expectedReceiptDisplay = elpis_line_expected_receipt_display($line);
                                                     $receiptState = (string) ($line['receipt_state'] ?? '');
                                                     $receiptClass = '';
-                                                    if ($receiptState === 'missing') {
+                                                    if ($receiptState === 'missing' || $receiptState === 'uncovered') {
                                                         $receiptClass = 'elpis-receipt--missing';
                                                     } elseif ($receiptState === 'on_stock' || $receiptState === 'partial') {
                                                         $receiptClass = 'elpis-receipt--stock';
@@ -865,6 +865,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
     }
 
     var timer = null;
+    var inventoryExpanded = false;
 
     function showLoader() {
         loader.classList.add('is-visible');
@@ -920,9 +921,37 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
         }
 
         stepsGrid.innerHTML = '';
+        inventoryExpanded = false;
         stepIds.forEach(function (stepId) {
             addStepSlot(stepId);
         });
+    }
+
+    function markInventoryProgress(done, total) {
+        done = parseInt(done, 10) || 0;
+        total = parseInt(total, 10) || 0;
+        if (!stepsGrid || total <= 1) {
+            if (done > 0) {
+                markStepDone('inventory');
+            }
+            return;
+        }
+
+        if (!inventoryExpanded) {
+            var single = stepsGrid.querySelector('[data-step-id="inventory"]');
+            if (single) {
+                single.remove();
+            }
+            inventoryExpanded = true;
+        }
+
+        var index;
+        for (index = 1; index <= total; index += 1) {
+            addStepSlot('inventory-' + index);
+        }
+        for (index = 1; index <= done && index <= total; index += 1) {
+            markStepDone('inventory-' + index);
+        }
     }
 
     function markStepDone(stepId) {
@@ -960,7 +989,7 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
         var stepIds = ['managers'];
 
         if (!url.searchParams.has('reload_managers')) {
-            stepIds.push('projects', 'lines');
+            stepIds.push('projects', 'lines', 'reservations', 'purchase', 'inventory');
         }
 
         return stepIds;
@@ -973,6 +1002,14 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
     function handleProgressEvent(eventData) {
         if (eventData.error) {
             throw new Error('progress failed');
+        }
+
+        if (eventData.step === 'inventory' && (eventData.status === 'progress' || eventData.status === 'done')) {
+            markInventoryProgress(eventData.done, eventData.total);
+            if (eventData.status === 'done' && !inventoryExpanded) {
+                markStepDone('inventory');
+            }
+            return;
         }
 
         if (eventData.status === 'done' && eventData.step) {
