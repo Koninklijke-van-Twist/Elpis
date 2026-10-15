@@ -418,8 +418,22 @@ function elpis_format_display_date(?string $value): string
     return date('d-m-Y', $timestamp);
 }
 
+function elpis_line_remaining_qty(array $line): ?float
+{
+    if (!array_key_exists('remaining_qty', $line) || $line['remaining_qty'] === null || $line['remaining_qty'] === '') {
+        return null;
+    }
+
+    return (float) $line['remaining_qty'];
+}
+
 function elpis_line_still_expecting_receipt(array $line): bool
 {
+    $remaining = elpis_line_remaining_qty($line);
+    if ($remaining !== null) {
+        return $remaining > 0.00001;
+    }
+
     if (!empty($line['completely_received'])) {
         return false;
     }
@@ -536,6 +550,8 @@ function elpis_normalize_planning_line_row(array $row): array
 {
     $purchaseOrderNo = trim((string) ($row['LVS_Purchase_Order_No'] ?? ''));
     $quantity = (float) ($row['Quantity'] ?? 0);
+    $remainingQty = array_key_exists('Remaining_Qty', $row) ? (float) $row['Remaining_Qty'] : null;
+    $reservedQuantity = array_key_exists('Reserved_Quantity', $row) ? (float) $row['Reserved_Quantity'] : null;
     $quantities = elpis_line_quantities(
         $quantity,
         $purchaseOrderNo,
@@ -550,6 +566,8 @@ function elpis_normalize_planning_line_row(array $row): array
         'item_no' => trim((string) ($row['No'] ?? '')),
         'description' => trim((string) ($row['Description'] ?? '')),
         'quantity' => $quantity,
+        'remaining_qty' => $remainingQty,
+        'reserved_quantity' => $reservedQuantity,
         'purchase_order_no' => $purchaseOrderNo,
         'completely_received' => elpis_bc_bool($row['LVS_Completely_Received'] ?? false),
         'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['KVT_Expected_Receipt_Date'] ?? '')),
@@ -648,7 +666,7 @@ function elpis_planning_line_type_filter(): string
 
 function elpis_werkorders_line_select_fields(): string
 {
-    return 'Job_No,Job_Task_No,Line_No,Job_Contract_Entry_No,Type,No,Description,Quantity';
+    return 'Job_No,Job_Task_No,Line_No,Job_Contract_Entry_No,Type,No,Description,Quantity,Remaining_Qty,Reserved_Quantity';
 }
 
 function elpis_inkoop_planning_select_fields(): string
@@ -1039,6 +1057,11 @@ function elpis_line_qty_still_needed(array $line): float
 {
     if (!elpis_line_still_expecting_receipt($line)) {
         return 0.0;
+    }
+
+    $remaining = elpis_line_remaining_qty($line);
+    if ($remaining !== null) {
+        return max(0.0, $remaining);
     }
 
     $quantity = (float) ($line['quantity'] ?? 0);

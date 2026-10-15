@@ -111,6 +111,9 @@ $werkordersSelect = elpis_werkorders_line_select_fields();
 if (!str_contains($werkordersSelect, 'Job_Contract_Entry_No') || !str_contains($werkordersSelect, 'Job_Task_No') || !str_contains($werkordersSelect, 'Line_No')) {
     fail('WerkordersLines-select mist Job_Contract_Entry_No, Job_Task_No of Line_No');
 }
+if (!str_contains($werkordersSelect, 'Remaining_Qty') || !str_contains($werkordersSelect, 'Reserved_Quantity')) {
+    fail('WerkordersLines-select mist Remaining_Qty of Reserved_Quantity');
+}
 if (!str_contains(elpis_inkoop_planning_select_fields(), 'KVT_Expected_Receipt_Date') || !str_contains(elpis_inkoop_planning_select_fields(), 'Job_Contract_Entry_No')) {
     fail('inkoopverrijking mist KVT_Expected_Receipt_Date of Job_Contract_Entry_No');
 }
@@ -145,6 +148,25 @@ if (($normalizedLine['job_task_no'] ?? '') !== 'WO2610572' || (int) ($normalized
 }
 if (abs((float) ($normalizedLine['quantity'] ?? 0) - 8) > 0.00001 || isset($normalizedLine['item_kind'])) {
     fail('planningsregel mag artikelsoort niet uit het nummer afleiden: ' . json_encode($normalizedLine));
+}
+if (elpis_line_remaining_qty($normalizedLine) !== null) {
+    fail('zonder Remaining_Qty op de bronrij blijft de geplande Quantity de terugval');
+}
+
+$doneLine = elpis_normalize_planning_line_row([
+    'Job_Task_No' => 'WO2610572',
+    'Line_No' => 50000,
+    'Job_Contract_Entry_No' => 99965,
+    'No' => 'PK-28170082',
+    'Quantity' => 8,
+    'Remaining_Qty' => 0,
+    'Reserved_Quantity' => 8,
+]);
+if (elpis_line_remaining_qty($doneLine) !== 0.0 || abs((float) ($doneLine['reserved_quantity'] ?? -1) - 8) > 0.00001) {
+    fail('Remaining_Qty en Reserved_Quantity moeten van WerkordersLines komen: ' . json_encode($doneLine));
+}
+if (elpis_line_still_expecting_receipt($doneLine) || elpis_line_qty_still_needed($doneLine) !== 0.0) {
+    fail('Remaining_Qty 0 is af, ook als Quantity nog 8 is');
 }
 
 $merged = elpis_merge_inkoop_planning_line($normalizedLine, [
@@ -648,6 +670,50 @@ $fallback = elpis_apply_receipt_expectations([
 ], [], [], []);
 if (($fallback['P-1'][0]['receipt_state'] ?? '') !== 'date' || ($fallback['P-1'][0]['expected_receipt_date'] ?? '') !== '2026-07-04') {
     fail('een gevulde planningsdatum blijft staan als er geen voorraad of inkooporder is: ' . json_encode($fallback['P-1'][0]));
+}
+
+$remainingCases = elpis_apply_receipt_expectations([
+    'P-REST0' => [
+        line([
+            'item_no' => 'PK-28170082',
+            'description' => 'Al uitgegeven',
+            'quantity' => 8,
+            'remaining_qty' => 0,
+            'reserved_quantity' => 8,
+            'qty_to_order' => 8,
+            'qty_ordered' => 0,
+            'qty_open' => 0,
+            'expected_receipt_date' => '',
+        ]),
+    ],
+    'P-REST1' => [
+        line([
+            'item_no' => 'PK-28170082',
+            'quantity' => 8,
+            'remaining_qty' => 1,
+            'qty_to_order' => 8,
+            'qty_ordered' => 0,
+            'qty_open' => 0,
+            'job_contract_entry_no' => 99965,
+            'line_no' => 50000,
+        ]),
+    ],
+], [
+    demand(2941903, 'P-REST1', 99965, 'PK-28170082', 1),
+    purchaseSupply(2941903, 'PK-28170082', 1, 'PO12606040', 10000, '2026-09-19'),
+], [], []);
+
+$finished = $remainingCases['P-REST0'][0];
+if (($finished['receipt_state'] ?? '') !== 'received' || elpis_line_expected_receipt_display($finished) !== '') {
+    fail('Remaining_Qty 0 mag geen Datum ontbreekt tonen: ' . json_encode($finished) . ' ' . elpis_line_expected_receipt_display($finished));
+}
+if ((elpis_project_execution_summary([$finished])['state'] ?? '') !== 'none') {
+    fail('een afgeronde regel telt niet mee voor uitvoering plannen vanaf');
+}
+
+$onlyRemainder = $remainingCases['P-REST1'][0];
+if (($onlyRemainder['receipt_state'] ?? '') !== 'date' || ($onlyRemainder['expected_receipt_date'] ?? '') !== '2026-09-19') {
+    fail('alleen Remaining_Qty telt als nog nodig, niet de geplande Quantity: ' . json_encode($onlyRemainder));
 }
 
 echo "OK\n";
