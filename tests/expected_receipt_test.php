@@ -87,14 +87,27 @@ function purchaseSupply(int $entryNo, string $itemNo, float $qty, string $docume
     ];
 }
 
-if (elpis_reservation_status_filter() !== "Reservation_Status eq 'Reservering'") {
-    fail('reserveringsfilter moet Reservation_Status eq Reservering zijn');
+if (elpis_reservation_status_filter() !== "Reservation_Status eq 'Reservation'") {
+    fail('reserveringsfilter moet de OData-optie Reservation gebruiken');
+}
+if (str_contains(elpis_reservation_status_filter(), 'Reservering')) {
+    fail('de caption Reservering is geen geldige filteroptie');
 }
 if (elpis_planning_line_type_filter() !== "Type eq 'Artikel'") {
     fail('artikelregels filteren op Type eq Artikel');
 }
-if (str_contains(elpis_reservation_status_filter(), "'Reservation'") || str_contains(elpis_planning_line_type_filter(), 'Item')) {
-    fail('Engelse enum-waarden horen niet in de filters');
+if (str_contains(elpis_planning_line_type_filter(), 'Item')) {
+    fail('Type blijft de Nederlandse optie Artikel');
+}
+foreach (['Reservation', 'Reservering'] as $acceptedStatus) {
+    if (!elpis_reservation_status_matches($acceptedStatus)) {
+        fail('antwoordstatus ' . $acceptedStatus . ' moet meetellen');
+    }
+}
+foreach (['Tracking', 'Surplus', 'Prospect', ''] as $ignoredStatus) {
+    if (elpis_reservation_status_matches($ignoredStatus)) {
+        fail('status ' . $ignoredStatus . ' telt niet als reservering');
+    }
 }
 
 foreach ([
@@ -580,6 +593,36 @@ if (($result['P-VRIJ'][0]['receipt_state'] ?? '') !== 'on_stock') {
 if (($result['P-VAST'][0]['receipt_state'] ?? '') !== 'missing') {
     fail('een echte Reservering op de artikelpost moet wel van de vrije voorraad af: ' . json_encode($result['P-VAST'][0]));
 }
+$englishStatus = elpis_apply_receipt_expectations([
+    'P-EN' => [line([
+        'item_no' => 'EN-1',
+        'quantity' => 4,
+        'qty_to_order' => 4,
+        'qty_ordered' => 0,
+        'qty_open' => 0,
+        'job_contract_entry_no' => 7,
+    ])],
+], [
+    stockSupply(70, 'EN-1', 4, 'Reservation'),
+], [], ['EN-1' => 4]);
+if (($englishStatus['P-EN'][0]['receipt_state'] ?? '') !== 'missing') {
+    fail('status Reservation in het antwoord moet de vrije voorraad net zo verlagen als Reservering: ' . json_encode($englishStatus['P-EN'][0]));
+}
+$quantityIgnored = stockSupply(71, 'QB-1', 0, 'Reservation');
+$quantityIgnored['quantity'] = 9;
+$baseOnly = elpis_apply_receipt_expectations([
+    'P-QB' => [line([
+        'item_no' => 'QB-1',
+        'quantity' => 4,
+        'qty_to_order' => 4,
+        'qty_ordered' => 0,
+        'qty_open' => 0,
+        'job_contract_entry_no' => 8,
+    ])],
+], [$quantityIgnored], [], ['QB-1' => 4]);
+if (($baseOnly['P-QB'][0]['receipt_state'] ?? '') !== 'on_stock') {
+    fail('alleen Quantity_Base telt; Quantity mag de vrije voorraad niet verlagen: ' . json_encode($baseOnly['P-QB'][0]));
+}
 if (($result['P-SUB'][0]['receipt_state'] ?? '') !== 'missing') {
     fail('alleen Source_Subtype 2 is een projectplanningsregel: ' . json_encode($result['P-SUB'][0]));
 }
@@ -761,7 +804,7 @@ foreach ($jobFilters as $jobFilter) {
 
 $demandFilter = elpis_reservation_demand_filter(['PRJ2605044', 'PRJ2608308']);
 foreach ([
-    "Reservation_Status eq 'Reservering'",
+    "Reservation_Status eq 'Reservation'",
     'Source_Type eq 1003',
     "Source_Subtype eq '2'",
     'Positive eq false',
@@ -778,7 +821,7 @@ if (str_contains($demandFilter, 'Positive eq true') || filter_ors_cross_fields($
 
 $supplyFilter = elpis_reservation_supply_filter([2941903, 10]);
 foreach ([
-    "Reservation_Status eq 'Reservering'",
+    "Reservation_Status eq 'Reservation'",
     'Positive eq true',
     'Source_Type eq 32',
     'Source_Type eq 39',
@@ -809,7 +852,7 @@ if (filter_ors_cross_fields($purchaseFilter) || $purchaseFilter === elpis_purcha
 
 $stockReservationFilter = elpis_item_stock_reservation_filter(['ITEM-9', 'ITEM-1']);
 foreach ([
-    "Reservation_Status eq 'Reservering'",
+    "Reservation_Status eq 'Reservation'",
     'Positive eq true',
     'Source_Type eq 32',
     "Item_No eq 'ITEM-1'",
@@ -821,6 +864,11 @@ foreach ([
 }
 if (str_contains($stockReservationFilter, 'Positive eq false') || str_contains($stockReservationFilter, 'Source_Type eq 39') || filter_ors_cross_fields($stockReservationFilter)) {
     fail('voorraadreserveringen mogen niet de hele tabel of inkoopaanbod zijn: ' . $stockReservationFilter);
+}
+foreach ([$demandFilter, $supplyFilter, $stockReservationFilter, elpis_item_inventory_select_fields()] as $scoped) {
+    if (str_contains($scoped, 'Location_Code') || str_contains($scoped, 'Reservering')) {
+        fail('voorraad en reserveringen blijven over alle locaties, met optie Reservation: ' . $scoped);
+    }
 }
 
 $mergedReservations = elpis_merge_reservations(

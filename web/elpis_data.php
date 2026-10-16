@@ -33,8 +33,12 @@ const ELPI_PURCHASE_LINE_SOURCE_TYPE = 39;
 const ELPI_JOB_PLANNING_SOURCE_TYPE = 1003;
 /** Job planning line: Source_Subtype komt als tekst '2' uit OData. */
 const ELPI_JOB_PLANNING_SUBTYPE = '2';
-/** Nederlandse enum op ReservationEntries.Reservation_Status. Alleen deze telt. */
-const ELPI_RESERVATION_STATUS = 'Reservering';
+/**
+ * OData-optie op ReservationEntries.Reservation_Status.
+ * Geldige filterwaarden: Reservation, Tracking, Surplus, Prospect.
+ * De caption 'Reservering' geeft "not a valid option". Het antwoord kan die caption nog wel tonen.
+ */
+const ELPI_RESERVATION_STATUS_OPTION = 'Reservation';
 /** Nederlandse enum op de planningsregel (Type). */
 const ELPI_ITEM_LINE_TYPE = 'Artikel';
 
@@ -256,6 +260,8 @@ function elpis_fetch_rows_direct(string $company, string $entitySet, array $quer
 
 function elpis_try_fetch_rows(string $company, string $entitySet, array $query, int $ttl = ELPI_CACHE_TTL): array
 {
+    // Een BC-fout, zoals een ongeldige enum, wordt een lege set. De pagina laadt dan
+    // door alsof er geen rijen waren. Alleen elpis.timing cache=error bevat de melding.
     $startedAt = microtime(true);
     try {
         return elpis_fetch_rows($company, $entitySet, $query, $ttl);
@@ -1155,7 +1161,14 @@ function elpis_reservation_select_fields(): string
 
 function elpis_reservation_status_filter(): string
 {
-    return "Reservation_Status eq '" . ELPI_RESERVATION_STATUS . "'";
+    return "Reservation_Status eq '" . ELPI_RESERVATION_STATUS_OPTION . "'";
+}
+
+function elpis_reservation_status_matches(string $status): bool
+{
+    $status = trim($status);
+
+    return $status === ELPI_RESERVATION_STATUS_OPTION || $status === 'Reservering';
 }
 
 function elpis_purchase_line_select_fields(): string
@@ -1210,6 +1223,8 @@ function elpis_purchase_documents_filter(array $documentNos): string
 
 function elpis_item_inventory_select_fields(): string
 {
+    // ItemList.Inventory is de artikelvoorraad over alle locaties. Geen Location_Code,
+    // zodat reserveringen en voorraad dezelfde scope houden.
     return 'No,Inventory';
 }
 
@@ -1220,12 +1235,7 @@ function elpis_receipt_filters_are_department_independent(string $filter): bool
 
 function elpis_reservation_qty(array $entry): float
 {
-    $base = abs((float) ($entry['quantity_base'] ?? 0));
-    if ($base > 0.00001) {
-        return $base;
-    }
-
-    return abs((float) ($entry['quantity'] ?? 0));
+    return abs((float) ($entry['quantity_base'] ?? 0));
 }
 
 function elpis_normalize_reservation_entry(array $row): array
@@ -1325,7 +1335,7 @@ function elpis_line_qty_still_needed(array $line): float
 
 function elpis_reservation_is_active(array $entry): bool
 {
-    return trim((string) ($entry['status'] ?? '')) === ELPI_RESERVATION_STATUS;
+    return elpis_reservation_status_matches((string) ($entry['status'] ?? ''));
 }
 
 function elpis_reservation_is_demand(array $entry): bool
