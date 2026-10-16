@@ -146,6 +146,7 @@ function elpis_line_row_class(float $toOrder, float $ordered, float $received, f
  * Page load
  */
 
+$pageStartedAt = microtime(true);
 $userEmail = elpis_current_user_email();
 $userPrefs = function_exists('loadUserPrefs') ? loadUserPrefs($userEmail) : [];
 $savedManagersByCompany = elpis_load_manager_prefs($userEmail);
@@ -214,17 +215,10 @@ try {
 
     if ($projectManager !== '' && !$deferProjectsLoad) {
         $projects = elpis_fetch_projects_for_manager($company, $projectManager);
-        $allLinesByProject = elpis_enrich_planning_lines_with_receipts(
+        $linesByProject = elpis_load_shown_lines(
             $company,
-            elpis_fetch_planning_lines_for_company($company)
+            elpis_project_nos_from_projects($projects)
         );
-        foreach ($projects as $project) {
-            $projectNo = (string) ($project['no'] ?? '');
-            if ($projectNo === '') {
-                continue;
-            }
-            $linesByProject[$projectNo] = $allLinesByProject[$projectNo] ?? [];
-        }
     }
 
     if ($company !== '' && !$deferProjectsLoad) {
@@ -242,6 +236,15 @@ try {
 } catch (Throwable $loadError) {
     $errorKey = 'elpis.error.load_failed';
 }
+
+elpis_log_timing(
+    $company,
+    'page',
+    ['$filter' => 'manager=' . $projectManager . ' projects=' . count($projects) . ' deferred=' . ($deferProjectsLoad ? '1' : '0')],
+    count($projects),
+    $pageStartedAt,
+    $deferProjectsLoad ? 'deferred' : 'html'
+);
 
 $projects = elpis_sort_projects_for_display($projects, $linesByProject);
 $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
@@ -985,14 +988,8 @@ $materialStatusCodes = elpis_collect_material_status_codes($linesByProject);
         return url;
     }
 
-    function buildStepIds(url) {
-        var stepIds = ['managers'];
-
-        if (!url.searchParams.has('reload_managers')) {
-            stepIds.push('projects', 'lines', 'reservations', 'purchase', 'inventory');
-        }
-
-        return stepIds;
+    function buildStepIds() {
+        return ['managers', 'projects', 'lines', 'reservations', 'purchase', 'inventory'];
     }
 
     function navigateTo(url) {
