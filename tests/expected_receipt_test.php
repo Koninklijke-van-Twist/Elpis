@@ -807,6 +807,30 @@ if (filter_ors_cross_fields($purchaseFilter) || $purchaseFilter === elpis_purcha
     fail('open inkoopregels mogen niet bedrijfswijd worden opgehaald: ' . $purchaseFilter);
 }
 
+$stockReservationFilter = elpis_item_stock_reservation_filter(['ITEM-9', 'ITEM-1']);
+foreach ([
+    "Reservation_Status eq 'Reservering'",
+    'Positive eq true',
+    'Source_Type eq 32',
+    "Item_No eq 'ITEM-1'",
+    "Item_No eq 'ITEM-9'",
+] as $part) {
+    if (!str_contains($stockReservationFilter, $part)) {
+        fail('voorraadreserveringsfilter mist ' . $part . ': ' . $stockReservationFilter);
+    }
+}
+if (str_contains($stockReservationFilter, 'Positive eq false') || str_contains($stockReservationFilter, 'Source_Type eq 39') || filter_ors_cross_fields($stockReservationFilter)) {
+    fail('voorraadreserveringen mogen niet de hele tabel of inkoopaanbod zijn: ' . $stockReservationFilter);
+}
+
+$mergedReservations = elpis_merge_reservations(
+    [stockSupply(10, 'ITEM-1', 8), stockSupply(99, 'ITEM-1', 1)],
+    [stockSupply(10, 'ITEM-1', 8)]
+);
+if (count($mergedReservations) !== 2) {
+    fail('dezelfde voorraadreservering mag niet dubbel tellen: ' . count($mergedReservations));
+}
+
 if (elpis_line_needs_receipt_lookup(line(['expected_receipt_date' => '2026-01-02']))) {
     fail('een gevulde ontvangstdatum hoeft geen reservering of voorraad meer');
 }
@@ -893,6 +917,21 @@ $GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $ent
             'Expected_Receipt_Date' => '0001-01-01',
         ]];
     }
+    if ($entity === ELPI_RESERVATION_ENTRY_ENTITY && str_contains($filter, 'Item_No eq')) {
+        return [[
+            'Entry_No' => 99,
+            'Positive' => true,
+            'Item_No' => 'ITEM-1',
+            'Quantity_Base' => 8,
+            'Quantity' => 8,
+            'Reservation_Status' => 'Reservering',
+            'Source_Type' => 32,
+            'Source_Subtype' => '0',
+            'Source_ID' => '',
+            'Source_Ref_No' => 0,
+            'Expected_Receipt_Date' => '0001-01-01',
+        ]];
+    }
     if ($entity === ELPI_RESERVATION_ENTRY_ENTITY) {
         return [[
             'Entry_No' => 10,
@@ -921,7 +960,7 @@ $GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $ent
         ]];
     }
     if ($entity === ELPI_ITEM_LIST_ENTITY) {
-        return [['No' => 'ITEM-1', 'Inventory' => 3]];
+        return [['No' => 'ITEM-1', 'Inventory' => 10]];
     }
 
     return [];
@@ -943,13 +982,14 @@ $lookupLines = [
         'remaining_qty' => 0,
     ])],
 ];
-elpis_load_receipt_context('Koninklijke van Twist', $lookupLines, ELPI_CACHE_TTL, null, static function (array $event) use (&$phases): void {
+$context = elpis_load_receipt_context('Koninklijke van Twist', $lookupLines, ELPI_CACHE_TTL, null, static function (array $event) use (&$phases): void {
     $phases[] = ($event['step'] ?? '') . ':' . ($event['status'] ?? '');
 });
 $entities = array_map(static function (array $call): string {
     return $call['entity'];
 }, $seen);
 if ($entities !== [
+    ELPI_RESERVATION_ENTRY_ENTITY,
     ELPI_RESERVATION_ENTRY_ENTITY,
     ELPI_RESERVATION_ENTRY_ENTITY,
     ELPI_PURCHASE_ORDER_LINE_ENTITY,
@@ -966,8 +1006,11 @@ foreach ($seen as $call) {
     if ($select === '' || filter_ors_cross_fields($filter)) {
         fail('query mist $select of OR-t over velden: ' . json_encode($call));
     }
-    if ($call['entity'] === ELPI_RESERVATION_ENTRY_ENTITY && !str_contains($filter, 'Source_ID eq') && !str_contains($filter, 'Entry_No eq')) {
-        fail('reserveringen zijn niet tot project of Entry_No beperkt: ' . $filter);
+    if ($call['entity'] === ELPI_RESERVATION_ENTRY_ENTITY && !str_contains($filter, 'Source_ID eq') && !str_contains($filter, 'Entry_No eq') && !str_contains($filter, 'Item_No eq')) {
+        fail('reserveringen zijn niet tot project, Entry_No of artikel beperkt: ' . $filter);
+    }
+    if ($call['entity'] === ELPI_RESERVATION_ENTRY_ENTITY && str_contains($filter, 'Item_No eq') && (!str_contains($filter, 'Source_Type eq 32') || str_contains($filter, 'Source_Type eq 39') || !str_contains($filter, "Item_No eq 'ITEM-1'"))) {
+        fail('voorraadreserveringen moeten op het getoonde artikel en Source_Type 32 blijven: ' . $filter);
     }
     if ($call['entity'] === ELPI_PURCHASE_ORDER_LINE_ENTITY && (!str_contains($filter, "Document_No eq 'PO-LINE'") || !str_contains($filter, "Document_No eq 'PO-1'") || str_contains($filter, 'PO-SKIP'))) {
         fail('inkooporders zijn niet beperkt tot de getoonde regels: ' . $filter);
@@ -986,6 +1029,47 @@ $seenBeforeRepeat = count($seen);
 elpis_load_receipt_context('Koninklijke van Twist', $lookupLines, ELPI_CACHE_TTL);
 if (count($seen) !== $seenBeforeRepeat) {
     fail('dezelfde ontvangstcontext werd opnieuw bij BC opgehaald');
+}
+$appliedOpen = elpis_apply_receipt_expectations(
+    $lookupLines,
+    $context['reservations'],
+    $context['purchase_lines'],
+    $context['inventory']
+)['PRJ-OPEN'][0];
+if (($appliedOpen['receipt_state'] ?? '') === 'on_stock' || abs((float) ($appliedOpen['covered_by_stock'] ?? -1) - 2) > 0.00001) {
+    fail('voorraad die op een ander project gereserveerd is moet van de vrije voorraad af: ' . json_encode($appliedOpen));
+}
+
+elpis_reset_fetch_memo();
+$stockCalls = [];
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity, array $query, int $ttl) use (&$stockCalls): array {
+    $stockCalls[] = ['entity' => $entity, 'query' => $query];
+
+    return [];
+};
+$stockItemNos = [];
+for ($i = 1; $i <= 13; $i++) {
+    $stockItemNos[] = 'ST' . $i;
+}
+elpis_fetch_item_stock_reservations('Koninklijke van Twist', $stockItemNos, ELPI_CACHE_TTL);
+if (count($stockCalls) !== 2) {
+    fail('voorraadreserveringen moeten in chunks van 12 artikelen: ' . count($stockCalls));
+}
+$firstStockFilter = (string) ($stockCalls[0]['query']['$filter'] ?? '');
+$secondStockFilter = (string) ($stockCalls[1]['query']['$filter'] ?? '');
+if (substr_count($firstStockFilter, 'Item_No eq') !== 12 || substr_count($secondStockFilter, 'Item_No eq') !== 1) {
+    fail('artikelchunks kloppen niet: ' . json_encode([$firstStockFilter, $secondStockFilter]));
+}
+foreach ([$firstStockFilter, $secondStockFilter] as $stockFilter) {
+    if (!str_contains($stockFilter, 'Source_Type eq 32') || str_contains($stockFilter, 'Source_Type eq 39') || filter_ors_cross_fields($stockFilter)) {
+        fail('artikelchunk scant te breed: ' . $stockFilter);
+    }
+}
+elpis_reset_fetch_memo();
+$stockCalls = [];
+elpis_fetch_item_stock_reservations('Koninklijke van Twist', [], ELPI_CACHE_TTL);
+if ($stockCalls !== []) {
+    fail('een lege artikellijst mag geen reserveringsquery doen');
 }
 
 elpis_reset_fetch_memo();

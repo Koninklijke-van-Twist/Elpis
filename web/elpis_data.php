@@ -1189,6 +1189,16 @@ function elpis_reservation_supply_filter(array $entryNos): string
     ]);
 }
 
+function elpis_item_stock_reservation_filter(array $itemNos): string
+{
+    return elpis_and_filters([
+        elpis_reservation_status_filter(),
+        'Positive eq true',
+        'Source_Type eq ' . ELPI_ITEM_LEDGER_SOURCE_TYPE,
+        elpis_odata_eq_list('Item_No', $itemNos),
+    ]);
+}
+
 function elpis_purchase_documents_filter(array $documentNos): string
 {
     return elpis_and_filters([
@@ -1437,7 +1447,7 @@ function elpis_fetch_reservation_entries_for_projects(string $company, array $pr
         }
     }
 
-    $entries = array_merge($demands, elpis_fetch_reservation_supplies($company, array_values($entryNos), $ttl));
+    $entries = elpis_merge_reservations($demands, elpis_fetch_reservation_supplies($company, array_values($entryNos), $ttl));
     elpis_log_timing(
         $company,
         ELPI_RESERVATION_ENTRY_ENTITY,
@@ -1562,6 +1572,67 @@ function elpis_fetch_item_inventory(string $company, array $itemNos, int $ttl = 
     return $map;
 }
 
+function elpis_reservation_row_key(array $entry): string
+{
+    return (int) ($entry['entry_no'] ?? 0)
+        . '|' . (($entry['positive'] ?? null) === true ? '1' : '0')
+        . '|' . (int) ($entry['source_type'] ?? 0)
+        . '|' . strtoupper(trim((string) ($entry['source_id'] ?? '')))
+        . '|' . (int) ($entry['source_ref_no'] ?? 0)
+        . '|' . strtoupper(trim((string) ($entry['item_no'] ?? '')));
+}
+
+function elpis_merge_reservations(array ...$groups): array
+{
+    $merged = [];
+    $seen = [];
+    foreach ($groups as $group) {
+        foreach ($group as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $key = elpis_reservation_row_key($entry);
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $merged[] = $entry;
+        }
+    }
+
+    return $merged;
+}
+
+function elpis_fetch_item_stock_reservations(string $company, array $itemNos, int $ttl = ELPI_CACHE_TTL): array
+{
+    $company = trim($company);
+    $itemNos = elpis_sort_odata_values(elpis_normalize_project_nos($itemNos));
+    if ($company === '' || $itemNos === []) {
+        elpis_log_timing($company, ELPI_RESERVATION_ENTRY_ENTITY, [], 0, microtime(true), 'skipped');
+
+        return [];
+    }
+
+    $entries = [];
+    foreach (array_chunk($itemNos, ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
+        $rows = elpis_try_fetch_rows($company, ELPI_RESERVATION_ENTRY_ENTITY, [
+            '$select' => elpis_reservation_select_fields(),
+            '$filter' => elpis_item_stock_reservation_filter($chunk),
+        ], $ttl);
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $normalized = elpis_normalize_reservation_entry($row);
+            if ($normalized['entry_no'] > 0 && elpis_reservation_is_stock_supply($normalized)) {
+                $entries[] = $normalized;
+            }
+        }
+    }
+
+    return $entries;
+}
+
 function elpis_line_needs_receipt_lookup(array $line): bool
 {
     if (!elpis_line_still_expecting_receipt($line)) {
@@ -1666,10 +1737,13 @@ function elpis_load_receipt_context(string $company, array $linesByProject, int 
 
     $startedAt = microtime(true);
     $emit('reservations', 'start');
-    $reservations = elpis_fetch_reservation_entries_for_projects(
-        $company,
-        elpis_projects_needing_reservations($linesByProject),
-        $ttl
+    $reservations = elpis_merge_reservations(
+        elpis_fetch_reservation_entries_for_projects(
+            $company,
+            elpis_projects_needing_reservations($linesByProject),
+            $ttl
+        ),
+        elpis_fetch_item_stock_reservations($company, elpis_collect_stock_item_nos($linesByProject), $ttl)
     );
     $emit('reservations', 'done');
 
