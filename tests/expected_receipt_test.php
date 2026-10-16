@@ -87,14 +87,27 @@ function purchaseSupply(int $entryNo, string $itemNo, float $qty, string $docume
     ];
 }
 
-if (elpis_reservation_status_filter() !== "Reservation_Status eq 'Reservering'") {
-    fail('reserveringsfilter moet Reservation_Status eq Reservering zijn');
+if (elpis_reservation_status_filter() !== "Reservation_Status eq 'Reservation'") {
+    fail('reserveringsfilter moet de OData-optie Reservation gebruiken');
+}
+if (str_contains(elpis_reservation_status_filter(), 'Reservering')) {
+    fail('de caption Reservering is geen geldige filteroptie');
 }
 if (elpis_planning_line_type_filter() !== "Type eq 'Artikel'") {
     fail('artikelregels filteren op Type eq Artikel');
 }
-if (str_contains(elpis_reservation_status_filter(), "'Reservation'") || str_contains(elpis_planning_line_type_filter(), 'Item')) {
-    fail('Engelse enum-waarden horen niet in de filters');
+if (str_contains(elpis_planning_line_type_filter(), 'Item')) {
+    fail('Type blijft de Nederlandse optie Artikel');
+}
+foreach (['Reservation', 'Reservering'] as $acceptedStatus) {
+    if (!elpis_reservation_status_matches($acceptedStatus)) {
+        fail('antwoordstatus ' . $acceptedStatus . ' moet meetellen');
+    }
+}
+foreach (['Tracking', 'Surplus', 'Prospect', ''] as $ignoredStatus) {
+    if (elpis_reservation_status_matches($ignoredStatus)) {
+        fail('status ' . $ignoredStatus . ' telt niet als reservering');
+    }
 }
 
 foreach ([
@@ -580,6 +593,36 @@ if (($result['P-VRIJ'][0]['receipt_state'] ?? '') !== 'on_stock') {
 if (($result['P-VAST'][0]['receipt_state'] ?? '') !== 'missing') {
     fail('een echte Reservering op de artikelpost moet wel van de vrije voorraad af: ' . json_encode($result['P-VAST'][0]));
 }
+$englishStatus = elpis_apply_receipt_expectations([
+    'P-EN' => [line([
+        'item_no' => 'EN-1',
+        'quantity' => 4,
+        'qty_to_order' => 4,
+        'qty_ordered' => 0,
+        'qty_open' => 0,
+        'job_contract_entry_no' => 7,
+    ])],
+], [
+    stockSupply(70, 'EN-1', 4, 'Reservation'),
+], [], ['EN-1' => 4]);
+if (($englishStatus['P-EN'][0]['receipt_state'] ?? '') !== 'missing') {
+    fail('status Reservation in het antwoord moet de vrije voorraad net zo verlagen als Reservering: ' . json_encode($englishStatus['P-EN'][0]));
+}
+$quantityIgnored = stockSupply(71, 'QB-1', 0, 'Reservation');
+$quantityIgnored['quantity'] = 9;
+$baseOnly = elpis_apply_receipt_expectations([
+    'P-QB' => [line([
+        'item_no' => 'QB-1',
+        'quantity' => 4,
+        'qty_to_order' => 4,
+        'qty_ordered' => 0,
+        'qty_open' => 0,
+        'job_contract_entry_no' => 8,
+    ])],
+], [$quantityIgnored], [], ['QB-1' => 4]);
+if (($baseOnly['P-QB'][0]['receipt_state'] ?? '') !== 'on_stock') {
+    fail('alleen Quantity_Base telt; Quantity mag de vrije voorraad niet verlagen: ' . json_encode($baseOnly['P-QB'][0]));
+}
 if (($result['P-SUB'][0]['receipt_state'] ?? '') !== 'missing') {
     fail('alleen Source_Subtype 2 is een projectplanningsregel: ' . json_encode($result['P-SUB'][0]));
 }
@@ -710,6 +753,438 @@ if (($finished['receipt_state'] ?? '') !== 'received' || elpis_line_expected_rec
 if ((elpis_project_execution_summary([$finished])['state'] ?? '') !== 'none') {
     fail('een afgeronde regel telt niet mee voor uitvoering plannen vanaf');
 }
+
+if (ELPI_CACHE_TTL !== 86400) {
+    fail('de UI houdt de app-TTL van 24 uur');
+}
+
+function filter_ors_cross_fields(string $filter): bool
+{
+    if (!preg_match_all(
+        "/([A-Za-z_][A-Za-z0-9_]*)\\s+eq\\s+(?:'(?:[^']|'')*'|-?\\d+|true|false)\\s+or\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+eq\\s+/",
+        $filter,
+        $matches,
+        PREG_SET_ORDER
+    )) {
+        return false;
+    }
+
+    foreach ($matches as $match) {
+        if ($match[1] !== $match[2]) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+if (elpis_odata_eq_list('Job_No', ["O'Brien"]) !== "Job_No eq 'O''Brien'") {
+    fail('OData-quotes moeten verdubbeld worden');
+}
+if (elpis_odata_eq_list('No', ['A', 'B']) !== "(No eq 'A' or No eq 'B')") {
+    fail('voorraadfilter moet een OR op hetzelfde veld No zijn');
+}
+
+$jobFilters = [];
+for ($i = 1; $i <= 13; $i++) {
+    $jobFilters[] = 'PRJ' . $i;
+}
+$jobFilters = elpis_job_scoped_filters($jobFilters);
+if (count($jobFilters) !== 2 || substr_count($jobFilters[0], 'Job_No eq') !== 12 || substr_count($jobFilters[1], 'Job_No eq') !== 1) {
+    fail('planningsregels moeten in chunks van 12 projecten: ' . json_encode($jobFilters));
+}
+if (!str_contains($jobFilters[0], ") and Type eq 'Artikel'") || $jobFilters[1] !== "Job_No eq 'PRJ13' and Type eq 'Artikel'") {
+    fail('jobfilter moet Type met AND koppelen: ' . json_encode($jobFilters));
+}
+foreach ($jobFilters as $jobFilter) {
+    if (filter_ors_cross_fields($jobFilter) || $jobFilter === "Type eq 'Artikel'") {
+        fail('jobfilter scant de hele tabel of OR-t over velden: ' . $jobFilter);
+    }
+}
+
+$demandFilter = elpis_reservation_demand_filter(['PRJ2605044', 'PRJ2608308']);
+foreach ([
+    "Reservation_Status eq 'Reservation'",
+    'Source_Type eq 1003',
+    "Source_Subtype eq '2'",
+    'Positive eq false',
+    "Source_ID eq 'PRJ2608308'",
+    "Source_ID eq 'PRJ2605044'",
+] as $part) {
+    if (!str_contains($demandFilter, $part)) {
+        fail('vraagfilter mist ' . $part . ': ' . $demandFilter);
+    }
+}
+if (str_contains($demandFilter, 'Positive eq true') || filter_ors_cross_fields($demandFilter) || $demandFilter === elpis_reservation_status_filter()) {
+    fail('vraagfilter mag geen volledige reserveringstabel zijn: ' . $demandFilter);
+}
+
+$supplyFilter = elpis_reservation_supply_filter([2941903, 10]);
+foreach ([
+    "Reservation_Status eq 'Reservation'",
+    'Positive eq true',
+    'Source_Type eq 32',
+    'Source_Type eq 39',
+    'Entry_No eq 10',
+    'Entry_No eq 2941903',
+] as $part) {
+    if (!str_contains($supplyFilter, $part)) {
+        fail('aanbodfilter mist ' . $part . ': ' . $supplyFilter);
+    }
+}
+if (str_contains($supplyFilter, 'Positive eq false') || filter_ors_cross_fields($supplyFilter)) {
+    fail('aanbodfilter OR-t over verschillende velden: ' . $supplyFilter);
+}
+
+$purchaseFilter = elpis_purchase_documents_filter(['PO12601384']);
+foreach ([
+    'Outstanding_Quantity gt 0',
+    "Type eq 'Artikel'",
+    "Document_No eq 'PO12601384'",
+] as $part) {
+    if (!str_contains($purchaseFilter, $part)) {
+        fail('inkoopfilter mist ' . $part . ': ' . $purchaseFilter);
+    }
+}
+if (filter_ors_cross_fields($purchaseFilter) || $purchaseFilter === elpis_purchase_line_open_filter()) {
+    fail('open inkoopregels mogen niet bedrijfswijd worden opgehaald: ' . $purchaseFilter);
+}
+
+$stockReservationFilter = elpis_item_stock_reservation_filter(['ITEM-9', 'ITEM-1']);
+foreach ([
+    "Reservation_Status eq 'Reservation'",
+    'Positive eq true',
+    'Source_Type eq 32',
+    "Item_No eq 'ITEM-1'",
+    "Item_No eq 'ITEM-9'",
+] as $part) {
+    if (!str_contains($stockReservationFilter, $part)) {
+        fail('voorraadreserveringsfilter mist ' . $part . ': ' . $stockReservationFilter);
+    }
+}
+if (str_contains($stockReservationFilter, 'Positive eq false') || str_contains($stockReservationFilter, 'Source_Type eq 39') || filter_ors_cross_fields($stockReservationFilter)) {
+    fail('voorraadreserveringen mogen niet de hele tabel of inkoopaanbod zijn: ' . $stockReservationFilter);
+}
+foreach ([$demandFilter, $supplyFilter, $stockReservationFilter, elpis_item_inventory_select_fields()] as $scoped) {
+    if (str_contains($scoped, 'Location_Code') || str_contains($scoped, 'Reservering')) {
+        fail('voorraad en reserveringen blijven over alle locaties, met optie Reservation: ' . $scoped);
+    }
+}
+
+$mergedReservations = elpis_merge_reservations(
+    [stockSupply(10, 'ITEM-1', 8), stockSupply(99, 'ITEM-1', 1)],
+    [stockSupply(10, 'ITEM-1', 8)]
+);
+if (count($mergedReservations) !== 2) {
+    fail('dezelfde voorraadreservering mag niet dubbel tellen: ' . count($mergedReservations));
+}
+
+if (elpis_line_needs_receipt_lookup(line(['expected_receipt_date' => '2026-01-02']))) {
+    fail('een gevulde ontvangstdatum hoeft geen reservering of voorraad meer');
+}
+if (elpis_line_needs_receipt_lookup(line(['remaining_qty' => 0]))) {
+    fail('Remaining_Qty 0 hoeft geen lookup');
+}
+if (!elpis_line_needs_receipt_lookup(line())) {
+    fail('een open regel zonder datum moet wel opgezocht worden');
+}
+
+$neededProjects = elpis_projects_needing_reservations([
+    'B' => [line()],
+    'A' => [line(['expected_receipt_date' => '2026-02-02'])],
+]);
+if ($neededProjects !== ['B']) {
+    fail('alleen projecten zonder ontvangstdatum vragen reserveringen: ' . json_encode($neededProjects));
+}
+
+$stockItems = elpis_collect_stock_item_nos([
+    'P' => [
+        line(['item_no' => 'NEED']),
+        line(['item_no' => 'DATED', 'expected_receipt_date' => '2026-03-03']),
+        line(['item_no' => 'DONE', 'remaining_qty' => 0]),
+    ],
+]);
+if ($stockItems !== ['NEED']) {
+    fail('voorraad alleen voor regels die nog een datum zoeken: ' . json_encode($stockItems));
+}
+
+$documents = elpis_collect_purchase_document_nos([
+    'P' => [
+        line(['purchase_order_no' => 'PO-NEED']),
+        line(['purchase_order_no' => 'PO-DATED', 'expected_receipt_date' => '2026-03-03']),
+    ],
+], [
+    purchaseSupply(1, 'NEED', 1, 'PO-SUP', 10000, '0001-01-01'),
+    purchaseSupply(2, 'NEED', 1, 'PO-HASDATE', 20000, '2026-04-04'),
+]);
+if ($documents !== ['PO-NEED', 'PO-SUP']) {
+    fail('alleen inkooporders zonder datum worden opgehaald: ' . json_encode($documents));
+}
+
+elpis_reset_fetch_memo();
+$seen = [];
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity, array $query, int $ttl) use (&$seen): array {
+    $seen[] = ['entity' => $entity, 'query' => $query, 'ttl' => $ttl, 'company' => $company];
+
+    return [];
+};
+elpis_fetch_reservation_entries('Koninklijke van Twist');
+elpis_fetch_open_purchase_order_lines('Koninklijke van Twist');
+elpis_fetch_planning_lines_for_company('Koninklijke van Twist');
+if ($seen === []) {
+    fail('projectfetch moet AppProjecten nog wel vragen');
+}
+foreach ($seen as $call) {
+    $filter = (string) ($call['query']['$filter'] ?? '');
+    if ($call['entity'] === ELPI_RESERVATION_ENTRY_ENTITY || $call['entity'] === ELPI_PURCHASE_ORDER_LINE_ENTITY || $call['entity'] === ELPI_PLANNING_LINE_ENTITY) {
+        fail('ongefilterde fetch mag BC niet raken: ' . $call['entity'] . ' ' . $filter);
+    }
+    if ($call['entity'] === 'AppProjecten' && (!str_contains($filter, "Project_Manager ne ''") || !str_contains((string) ($call['query']['$select'] ?? ''), 'No'))) {
+        fail('projectenquery is verbreed: ' . json_encode($call['query']));
+    }
+}
+
+elpis_reset_fetch_memo();
+$seen = [];
+$phases = [];
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity, array $query, int $ttl) use (&$seen): array {
+    $seen[] = ['entity' => $entity, 'query' => $query, 'ttl' => $ttl];
+    $filter = (string) ($query['$filter'] ?? '');
+    if ($entity === ELPI_RESERVATION_ENTRY_ENTITY && str_contains($filter, 'Positive eq false')) {
+        return [[
+            'Entry_No' => 10,
+            'Positive' => false,
+            'Item_No' => 'ITEM-1',
+            'Quantity_Base' => -1,
+            'Quantity' => -1,
+            'Reservation_Status' => 'Reservering',
+            'Source_Type' => 1003,
+            'Source_Subtype' => '2',
+            'Source_ID' => 'PRJ-OPEN',
+            'Source_Ref_No' => 10000,
+            'Expected_Receipt_Date' => '0001-01-01',
+        ]];
+    }
+    if ($entity === ELPI_RESERVATION_ENTRY_ENTITY && str_contains($filter, 'Item_No eq')) {
+        return [[
+            'Entry_No' => 99,
+            'Positive' => true,
+            'Item_No' => 'ITEM-1',
+            'Quantity_Base' => 8,
+            'Quantity' => 8,
+            'Reservation_Status' => 'Reservering',
+            'Source_Type' => 32,
+            'Source_Subtype' => '0',
+            'Source_ID' => '',
+            'Source_Ref_No' => 0,
+            'Expected_Receipt_Date' => '0001-01-01',
+        ]];
+    }
+    if ($entity === ELPI_RESERVATION_ENTRY_ENTITY) {
+        return [[
+            'Entry_No' => 10,
+            'Positive' => true,
+            'Item_No' => 'ITEM-1',
+            'Quantity_Base' => 1,
+            'Quantity' => 1,
+            'Reservation_Status' => 'Reservering',
+            'Source_Type' => 39,
+            'Source_Subtype' => '1',
+            'Source_ID' => 'PO-1',
+            'Source_Ref_No' => 10000,
+            'Expected_Receipt_Date' => '0001-01-01',
+        ]];
+    }
+    if ($entity === ELPI_PURCHASE_ORDER_LINE_ENTITY) {
+        return [[
+            'Document_No' => 'PO-1',
+            'Line_No' => 10000,
+            'No' => 'ITEM-1',
+            'Type' => 'Artikel',
+            'Expected_Receipt_Date' => '2026-05-01',
+            'Promised_Receipt_Date' => '0001-01-01',
+            'Planned_Receipt_Date' => '0001-01-01',
+            'Outstanding_Quantity' => 1,
+        ]];
+    }
+    if ($entity === ELPI_ITEM_LIST_ENTITY) {
+        return [['No' => 'ITEM-1', 'Inventory' => 10]];
+    }
+
+    return [];
+};
+
+$lookupLines = [
+    'PRJ-OPEN' => [line([
+        'item_no' => 'ITEM-1',
+        'purchase_order_no' => 'PO-LINE',
+        'job_contract_entry_no' => 10000,
+    ])],
+    'PRJ-DATED' => [line([
+        'item_no' => 'DATED-ITEM',
+        'purchase_order_no' => 'PO-SKIP',
+        'expected_receipt_date' => '2026-01-01',
+    ])],
+    'PRJ-DONE' => [line([
+        'item_no' => 'DONE-ITEM',
+        'remaining_qty' => 0,
+    ])],
+];
+$context = elpis_load_receipt_context('Koninklijke van Twist', $lookupLines, ELPI_CACHE_TTL, null, static function (array $event) use (&$phases): void {
+    $phases[] = ($event['step'] ?? '') . ':' . ($event['status'] ?? '');
+});
+$entities = array_map(static function (array $call): string {
+    return $call['entity'];
+}, $seen);
+if ($entities !== [
+    ELPI_RESERVATION_ENTRY_ENTITY,
+    ELPI_RESERVATION_ENTRY_ENTITY,
+    ELPI_RESERVATION_ENTRY_ENTITY,
+    ELPI_PURCHASE_ORDER_LINE_ENTITY,
+    ELPI_ITEM_LIST_ENTITY,
+]) {
+    fail('ontvangstcontext haalt de verkeerde sets op: ' . json_encode($entities));
+}
+foreach ($seen as $call) {
+    $filter = (string) ($call['query']['$filter'] ?? '');
+    $select = (string) ($call['query']['$select'] ?? '');
+    if ($call['ttl'] !== ELPI_CACHE_TTL) {
+        fail('UI-query moet ELPI_CACHE_TTL als max_age houden');
+    }
+    if ($select === '' || filter_ors_cross_fields($filter)) {
+        fail('query mist $select of OR-t over velden: ' . json_encode($call));
+    }
+    if ($call['entity'] === ELPI_RESERVATION_ENTRY_ENTITY && !str_contains($filter, 'Source_ID eq') && !str_contains($filter, 'Entry_No eq') && !str_contains($filter, 'Item_No eq')) {
+        fail('reserveringen zijn niet tot project, Entry_No of artikel beperkt: ' . $filter);
+    }
+    if ($call['entity'] === ELPI_RESERVATION_ENTRY_ENTITY && str_contains($filter, 'Item_No eq') && (!str_contains($filter, 'Source_Type eq 32') || str_contains($filter, 'Source_Type eq 39') || !str_contains($filter, "Item_No eq 'ITEM-1'"))) {
+        fail('voorraadreserveringen moeten op het getoonde artikel en Source_Type 32 blijven: ' . $filter);
+    }
+    if ($call['entity'] === ELPI_PURCHASE_ORDER_LINE_ENTITY && (!str_contains($filter, "Document_No eq 'PO-LINE'") || !str_contains($filter, "Document_No eq 'PO-1'") || str_contains($filter, 'PO-SKIP'))) {
+        fail('inkooporders zijn niet beperkt tot de getoonde regels: ' . $filter);
+    }
+    if ($call['entity'] === ELPI_ITEM_LIST_ENTITY && ($filter !== "No eq 'ITEM-1'" || !str_contains($select, 'Inventory'))) {
+        fail('voorraadquery moet alleen het benodigde artikel selecteren: ' . $filter);
+    }
+    if (str_contains($filter, 'PRJ-DATED') || str_contains($filter, 'PRJ-DONE') || str_contains($filter, 'DATED-ITEM') || str_contains($filter, 'DONE-ITEM')) {
+        fail('query bevat een project of artikel dat niet opgezocht hoeft te worden: ' . $filter);
+    }
+}
+if ($phases !== ['reservations:start', 'reservations:done', 'purchase:start', 'purchase:done', 'inventory:start', 'inventory:progress', 'inventory:done']) {
+    fail('voortgangsfasen wijken af: ' . json_encode($phases));
+}
+$seenBeforeRepeat = count($seen);
+elpis_load_receipt_context('Koninklijke van Twist', $lookupLines, ELPI_CACHE_TTL);
+if (count($seen) !== $seenBeforeRepeat) {
+    fail('dezelfde ontvangstcontext werd opnieuw bij BC opgehaald');
+}
+$appliedOpen = elpis_apply_receipt_expectations(
+    $lookupLines,
+    $context['reservations'],
+    $context['purchase_lines'],
+    $context['inventory']
+)['PRJ-OPEN'][0];
+if (($appliedOpen['receipt_state'] ?? '') === 'on_stock' || abs((float) ($appliedOpen['covered_by_stock'] ?? -1) - 2) > 0.00001) {
+    fail('voorraad die op een ander project gereserveerd is moet van de vrije voorraad af: ' . json_encode($appliedOpen));
+}
+
+elpis_reset_fetch_memo();
+$stockCalls = [];
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity, array $query, int $ttl) use (&$stockCalls): array {
+    $stockCalls[] = ['entity' => $entity, 'query' => $query];
+
+    return [];
+};
+$stockItemNos = [];
+for ($i = 1; $i <= 13; $i++) {
+    $stockItemNos[] = 'ST' . $i;
+}
+elpis_fetch_item_stock_reservations('Koninklijke van Twist', $stockItemNos, ELPI_CACHE_TTL);
+if (count($stockCalls) !== 2) {
+    fail('voorraadreserveringen moeten in chunks van 12 artikelen: ' . count($stockCalls));
+}
+$firstStockFilter = (string) ($stockCalls[0]['query']['$filter'] ?? '');
+$secondStockFilter = (string) ($stockCalls[1]['query']['$filter'] ?? '');
+if (substr_count($firstStockFilter, 'Item_No eq') !== 12 || substr_count($secondStockFilter, 'Item_No eq') !== 1) {
+    fail('artikelchunks kloppen niet: ' . json_encode([$firstStockFilter, $secondStockFilter]));
+}
+foreach ([$firstStockFilter, $secondStockFilter] as $stockFilter) {
+    if (!str_contains($stockFilter, 'Source_Type eq 32') || str_contains($stockFilter, 'Source_Type eq 39') || filter_ors_cross_fields($stockFilter)) {
+        fail('artikelchunk scant te breed: ' . $stockFilter);
+    }
+}
+elpis_reset_fetch_memo();
+$stockCalls = [];
+elpis_fetch_item_stock_reservations('Koninklijke van Twist', [], ELPI_CACHE_TTL);
+if ($stockCalls !== []) {
+    fail('een lege artikellijst mag geen reserveringsquery doen');
+}
+
+elpis_reset_fetch_memo();
+$seen = [];
+$projectNos = [];
+for ($i = 1; $i <= 13; $i++) {
+    $projectNos[] = 'PRJ' . $i;
+}
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity, array $query, int $ttl) use (&$seen): array {
+    $seen[] = ['entity' => $entity, 'query' => $query, 'ttl' => $ttl];
+    if ($entity === ELPI_PLANNING_LINE_ENTITY) {
+        return [[
+            'Job_No' => 'PRJ1',
+            'Job_Task_No' => 'T1',
+            'Line_No' => 10000,
+            'Job_Contract_Entry_No' => 5,
+            'Type' => 'Artikel',
+            'No' => 'ITEM',
+            'Description' => 'Regel',
+            'Quantity' => 1,
+            'Remaining_Qty' => 1,
+            'Reserved_Quantity' => 0,
+        ]];
+    }
+
+    return [];
+};
+elpis_fetch_planning_lines_by_projects('Koninklijke van Twist', $projectNos, ELPI_CACHE_TTL);
+if (count($seen) !== 3
+    || $seen[0]['entity'] !== ELPI_PLANNING_LINE_ENTITY
+    || $seen[1]['entity'] !== ELPI_INKOOP_PLANNING_ENTITY
+    || $seen[2]['entity'] !== ELPI_PLANNING_LINE_ENTITY
+) {
+    fail('planningschunks kloppen niet: ' . json_encode(array_column($seen, 'entity')));
+}
+if (($seen[0]['query']['$filter'] ?? '') !== ($seen[1]['query']['$filter'] ?? '')) {
+    fail('inkoopverrijking moet dezelfde projectchunk gebruiken als WerkordersLines');
+}
+if (($seen[0]['query']['$select'] ?? '') !== elpis_werkorders_line_select_fields() || ($seen[1]['query']['$select'] ?? '') !== elpis_inkoop_planning_select_fields()) {
+    fail('$select van planning of inkoop is verschoven');
+}
+if (substr_count((string) $seen[0]['query']['$filter'], 'Job_No eq') !== 12 || (string) $seen[2]['query']['$filter'] !== "Job_No eq 'PRJ13' and Type eq 'Artikel'") {
+    fail('een chunk zonder regels mag geen tweede inkoopquery doen en moet Job_No bevatten: ' . json_encode(array_column(array_column($seen, 'query'), '$filter')));
+}
+$seenBeforeRepeat = count($seen);
+elpis_fetch_planning_lines_by_projects('Koninklijke van Twist', array_reverse($projectNos), ELPI_CACHE_TTL);
+if (count($seen) !== $seenBeforeRepeat) {
+    fail('dezelfde projectchunk werd opnieuw opgehaald');
+}
+
+$indexSource = file_get_contents(dirname(__DIR__) . '/web/index.php');
+$progressSource = file_get_contents(dirname(__DIR__) . '/web/elpis_progress.php');
+if (!is_string($indexSource) || !is_string($progressSource)) {
+    fail('paginabronnen zijn niet leesbaar');
+}
+if (str_contains($indexSource, 'elpis_fetch_planning_lines_for_company')
+    || str_contains($progressSource, 'elpis_fetch_planning_lines_for_company')
+    || str_contains($progressSource, 'elpis_fetch_reservation_entries(')
+    || str_contains($progressSource, 'elpis_fetch_open_purchase_order_lines(')
+    || !str_contains($indexSource, 'elpis_load_shown_lines')
+    || !str_contains($progressSource, 'elpis_load_shown_lines')
+) {
+    fail('de pagina of de voortgang laadt nog de bedrijfswijde sets');
+}
+
+unset($GLOBALS['ELPIS_FETCH_OBSERVER']);
+elpis_reset_fetch_memo();
 
 $onlyRemainder = $remainingCases['P-REST1'][0];
 if (($onlyRemainder['receipt_state'] ?? '') !== 'date' || ($onlyRemainder['expected_receipt_date'] ?? '') !== '2026-09-19') {
