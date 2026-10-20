@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 7;
+const ELPI_PROJECT_CACHE_VERSION = 8;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -329,6 +329,9 @@ function elpis_try_fetch_rows(string $company, string $entitySet, array $query, 
         elpis_log_timing($company, $entitySet, $query, 0, $startedAt, 'error');
         $message = str_replace(["\n", "\r"], ' ', $error->getMessage());
         error_log('elpis.timing error entity=' . $entitySet . ' message=' . $message);
+        if ($entitySet === ELPI_PURCHASE_ORDER_LINE_ENTITY) {
+            elpis_log_purchase_lines_failure($company, $query, $message);
+        }
         elpis_trace('odata', [
             'entity' => $entitySet,
             'filter' => (string) ($query['$filter'] ?? ''),
@@ -1600,9 +1603,31 @@ function elpis_reservation_status_matches(string $status): bool
 
 function elpis_purchase_line_select_fields(): string
 {
-    // Job_Line_Type is op de ontvangen regels leeg. Job_Task_No is daar het
-    // werkordernummer, niet de planningsregel. Beide wel ophalen, niet filteren.
-    return 'Document_No,Line_No,No,Document_Type,Quantity,Expected_Receipt_Date,Promised_Receipt_Date,Planned_Receipt_Date,LVS_Completely_Received,Outstanding_Quantity,Job_No,Job_Task_No,Job_Line_Type';
+    // Alleen velden die op PurchaseLines bestaan. Promised_Receipt_Date,
+    // Planned_Receipt_Date en Quantity_Received geven HTTP 400 op de hele query.
+    // Job_Task_No is daar het werkordernummer; niet op taak of regeltype filteren.
+    return 'Document_No,Line_No,Document_Type,Type,No,Job_No,Job_Task_No,Job_Line_Type,Quantity,Outstanding_Quantity,Expected_Receipt_Date,LVS_Completely_Received';
+}
+
+function elpis_log_purchase_lines_failure(string $company, array $query, string $message): void
+{
+    if (!isset($GLOBALS['ELPIS_PURCHASE_LINE_ERRORS']) || !is_array($GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'])) {
+        $GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'] = [];
+    }
+    $entry = [
+        'company' => $company,
+        'filter' => (string) ($query['$filter'] ?? ''),
+        'select' => (string) ($query['$select'] ?? ''),
+        'message' => $message,
+    ];
+    $GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'][] = $entry;
+    error_log(sprintf(
+        'elpis.purchase_lines FAILED company="%s" select="%s" filter="%s" message="%s"',
+        str_replace(["\n", "\r", '"'], [' ', ' ', "'"], $company),
+        str_replace(["\n", "\r", '"'], [' ', ' ', "'"], $entry['select']),
+        str_replace(["\n", "\r", '"'], [' ', ' ', "'"], $entry['filter']),
+        str_replace(["\n", "\r", '"'], [' ', ' ', "'"], $message)
+    ));
 }
 
 function elpis_purchase_line_open_filter(): string
@@ -1752,9 +1777,7 @@ function elpis_normalize_purchase_order_line(array $row): array
         'job_no' => trim((string) ($row['Job_No'] ?? $row['job_no'] ?? '')),
         'job_task_no' => trim((string) ($row['Job_Task_No'] ?? $row['job_task_no'] ?? '')),
         'job_line_type' => trim((string) ($row['Job_Line_Type'] ?? $row['job_line_type'] ?? '')),
-        'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['Expected_Receipt_Date'] ?? '')),
-        'promised_receipt_date' => elpis_normalize_bc_date((string) ($row['Promised_Receipt_Date'] ?? '')),
-        'planned_receipt_date' => elpis_normalize_bc_date((string) ($row['Planned_Receipt_Date'] ?? '')),
+        'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['Expected_Receipt_Date'] ?? $row['expected_receipt_date'] ?? '')),
         'quantity' => array_key_exists('Quantity', $row) ? (float) $row['Quantity'] : (array_key_exists('quantity', $row) ? (float) $row['quantity'] : null),
         'outstanding_qty' => array_key_exists('Outstanding_Quantity', $row) ? (float) $row['Outstanding_Quantity'] : (array_key_exists('outstanding_qty', $row) ? (float) $row['outstanding_qty'] : null),
         'completely_received' => array_key_exists('completely_received', $row) && !array_key_exists('LVS_Completely_Received', $row)
@@ -1765,14 +1788,9 @@ function elpis_normalize_purchase_order_line(array $row): array
 
 function elpis_purchase_line_best_date(array $line): string
 {
-    foreach (['expected_receipt_date', 'promised_receipt_date', 'planned_receipt_date'] as $key) {
-        $date = elpis_normalize_bc_date((string) ($line[$key] ?? ''));
-        if ($date !== '') {
-            return substr($date, 0, 10);
-        }
-    }
+    $date = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
 
-    return '';
+    return $date === '' ? '' : substr($date, 0, 10);
 }
 
 function elpis_latest_date(array $dates): string
@@ -2891,18 +2909,10 @@ function elpis_finalize_line(
         $line['expected_receipt_date'] = substr($kvtDate, 0, 10);
         $line['expected_receipt_source'] = 'WerkordersLines -> KVT_Expected_Receipt_Date';
     } elseif (is_array($purchase)) {
-        foreach ([
-            'expected_receipt_date' => 'Expected_Receipt_Date',
-            'promised_receipt_date' => 'Promised_Receipt_Date',
-            'planned_receipt_date' => 'Planned_Receipt_Date',
-        ] as $key => $field) {
-            $date = elpis_normalize_bc_date((string) ($purchase[$key] ?? ''));
-            if ($date === '') {
-                continue;
-            }
+        $date = elpis_normalize_bc_date((string) ($purchase['expected_receipt_date'] ?? ''));
+        if ($date !== '') {
             $line['expected_receipt_date'] = substr($date, 0, 10);
-            $line['expected_receipt_source'] = 'PurchaseLines -> ' . $field;
-            break;
+            $line['expected_receipt_source'] = 'PurchaseLines -> Expected_Receipt_Date';
         }
     }
 
@@ -3583,6 +3593,7 @@ function elpis_debug_project_line(string $company, string $projectNo, string $it
     $cacheBefore = elpis_debug_cache_layers($company, $projectNo);
     $GLOBALS['ELPIS_LINE_TRACE'] = [];
     $GLOBALS['ELPIS_TRACE_ITEM'] = $itemNo;
+    $GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'] = [];
     $error = '';
     $lines = [];
     try {
@@ -3655,6 +3666,7 @@ function elpis_debug_project_line(string $company, string $projectNo, string $it
         'cache_before' => $cacheBefore,
         'cache_after' => elpis_debug_cache_layers($company, $projectNo),
         'fetches' => $fetches,
+        'purchase_lines_errors' => is_array($GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'] ?? null) ? $GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'] : [],
         'steps' => $steps,
         'lines' => $shown,
         'conclusion' => elpis_debug_conclusion($shown, $trace),
