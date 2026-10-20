@@ -120,8 +120,22 @@ if (!str_contains($ledger, "Entry_Type eq 'Purchase'") || !str_contains($ledger,
 if (!str_contains(elpis_item_ledger_select_fields(), 'Quantity')) {
     fail('ontvangstposten moeten Quantity ophalen');
 }
-if (!str_contains(elpis_purchase_line_select_fields(), 'Outstanding_Quantity') || !str_contains(elpis_purchase_line_select_fields(), 'LVS_Completely_Received') || !str_contains(elpis_purchase_line_select_fields(), 'Quantity') || !str_contains(elpis_purchase_line_select_fields(), 'Job_No') || !str_contains(elpis_purchase_line_select_fields(), 'Job_Task_No') || !str_contains(elpis_purchase_line_select_fields(), 'Job_Line_Type')) {
-    fail('inkoopselect moet Quantity, Outstanding_Quantity, LVS_Completely_Received, Job_No, Job_Task_No en Job_Line_Type lezen');
+$purchaseSelect = array_values(array_filter(array_map('trim', explode(',', elpis_purchase_line_select_fields()))));
+$purchaseSelectAllowed = ['Document_No', 'Line_No', 'Document_Type', 'Type', 'No', 'Job_No', 'Job_Task_No', 'Job_Line_Type', 'Quantity', 'Outstanding_Quantity', 'Expected_Receipt_Date', 'LVS_Completely_Received'];
+foreach ($purchaseSelect as $purchaseField) {
+    if (!in_array($purchaseField, $purchaseSelectAllowed, true)) {
+        fail('PurchaseLines-select bevat een niet bewezen veld: ' . $purchaseField);
+    }
+}
+foreach (['Document_No', 'Line_No', 'Type', 'No', 'Job_No', 'Job_Task_No', 'Job_Line_Type', 'Quantity', 'Outstanding_Quantity', 'Expected_Receipt_Date', 'LVS_Completely_Received'] as $purchaseField) {
+    if (!in_array($purchaseField, $purchaseSelect, true)) {
+        fail('PurchaseLines-select mist ' . $purchaseField);
+    }
+}
+foreach (['Promised_Receipt_Date', 'Planned_Receipt_Date', 'Quantity_Received'] as $purchaseField) {
+    if (in_array($purchaseField, $purchaseSelect, true) || str_contains(elpis_purchase_line_select_fields(), $purchaseField)) {
+        fail('PurchaseLines-select mag ' . $purchaseField . ' niet opvragen');
+    }
 }
 
 $jobFilters = elpis_job_scoped_filters(array_map(static fn (int $i): string => 'P' . $i, range(1, 13)));
@@ -207,10 +221,15 @@ $promisedOnly = elpis_apply_receipt_expectations(['PRJ2606522' => [planningLine(
     'expected_receipt_date' => '',
     'promised_receipt_date' => '2026-10-21',
     'planned_receipt_date' => '2026-10-01',
+    'quantity' => 4,
+    'outstanding_qty' => 1,
     'completely_received' => false,
 ]], []);
-if (($promisedOnly['PRJ2606522'][0]['expected_receipt_date'] ?? '') !== '2026-10-21' || !str_contains((string) ($promisedOnly['PRJ2606522'][0]['expected_receipt_source'] ?? ''), 'Promised_Receipt_Date')) {
-    fail('Promised gaat voor op Planned: ' . json_encode($promisedOnly['PRJ2606522'][0]));
+if (($promisedOnly['PRJ2606522'][0]['expected_receipt_date'] ?? 'x') !== '' || str_contains((string) ($promisedOnly['PRJ2606522'][0]['expected_receipt_source'] ?? ''), 'Promised_Receipt_Date') || str_contains((string) ($promisedOnly['PRJ2606522'][0]['expected_receipt_source'] ?? ''), 'Planned_Receipt_Date')) {
+    fail('Promised_Receipt_Date en Planned_Receipt_Date bestaan niet op PurchaseLines: ' . json_encode($promisedOnly['PRJ2606522'][0]));
+}
+if (abs((float) ($promisedOnly['PRJ2606522'][0]['qty_received'] ?? -1) - 3) > 0.00001 || abs((float) ($promisedOnly['PRJ2606522'][0]['qty_open'] ?? -1) - 1) > 0.00001 || abs((float) ($promisedOnly['PRJ2606522'][0]['qty_ordered'] ?? -1) - 4) > 0.00001) {
+    fail('ontvangen is Quantity min Outstanding_Quantity: ' . json_encode($promisedOnly['PRJ2606522'][0]));
 }
 
 $kvtWins = elpis_apply_receipt_expectations(['PRJ2606522' => [planningLine(['expected_receipt_date' => '2026-12-01'])]], [], $purchase, []);
@@ -1200,8 +1219,8 @@ file_put_contents($stalePath, json_encode([
 if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
     fail('projectcache zonder versie wordt genegeerd');
 }
-if (ELPI_PROJECT_CACHE_VERSION !== 7) {
-    fail('projectcacheversie moet 7 zijn zodat de inkoopregel via document en regelnummer opnieuw gekoppeld wordt');
+if (ELPI_PROJECT_CACHE_VERSION !== 8) {
+    fail('projectcacheversie moet 8 zijn zodat PurchaseLines opnieuw zonder Promised_Receipt_Date wordt opgehaald');
 }
 $previousVersionPath = elpis_project_cache_path('Koninklijke van Twist', '153390');
 file_put_contents($previousVersionPath, json_encode([
@@ -1513,6 +1532,32 @@ $purchaseFetches = array_values(array_filter($debugMiss['fetches'], static funct
 }));
 if (!is_array($debugMissLine) || abs((float) ($debugMissLine['qty_ordered'] ?? -1) - 112) > 0.00001 || abs((float) ($debugMissLine['qty_open'] ?? -1) - 112) > 0.00001 || abs((float) ($debugMissLine['qty_received'] ?? -1)) > 0.00001 || $purchaseFetches === [] || (int) ($purchaseFetches[0]['rows'] ?? -1) !== 0 || !str_contains((string) ($debugMiss['conclusion'] ?? ''), 'WerkordersLines')) {
     fail('zonder PurchaseLines-rijen blijft 112/112/0 terwijl finalize wel loopt: ' . json_encode($debugMiss));
+}
+unset($GLOBALS['ELPIS_FETCH_OBSERVER']);
+elpis_reset_fetch_memo();
+$GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'] = [];
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity): array {
+    if ($entity === ELPI_PURCHASE_ORDER_LINE_ENTITY) {
+        throw new RuntimeException('HTTP 400 Could not find a property named Promised_Receipt_Date on type NAV.PurchaseLines');
+    }
+
+    return [];
+};
+$failedPurchaseRows = elpis_try_fetch_rows('Koninklijke van Twist', ELPI_PURCHASE_ORDER_LINE_ENTITY, [
+    '$select' => elpis_purchase_line_select_fields(),
+    '$filter' => "Document_Type eq 'Order' and Document_No eq 'PO12600678'",
+]);
+$purchaseFailure = $GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'][0] ?? null;
+if ($failedPurchaseRows !== [] || !is_array($purchaseFailure) || !str_contains((string) ($purchaseFailure['message'] ?? ''), 'Promised_Receipt_Date') || !str_contains((string) ($purchaseFailure['select'] ?? ''), 'Outstanding_Quantity')) {
+    fail('een PurchaseLines-fout moet gelogd worden: ' . json_encode($purchaseFailure));
+}
+$GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'] = [];
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (): array {
+    throw new RuntimeException('HTTP 400 andere entiteit');
+};
+elpis_try_fetch_rows('Koninklijke van Twist', ELPI_PLANNING_LINE_ENTITY, ['$select' => 'No']);
+if (($GLOBALS['ELPIS_PURCHASE_LINE_ERRORS'] ?? []) !== []) {
+    fail('een fout op een andere entiteit mag de PurchaseLines-log niet vullen');
 }
 unset($GLOBALS['ELPIS_FETCH_OBSERVER']);
 elpis_reset_fetch_memo();
