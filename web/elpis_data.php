@@ -132,6 +132,36 @@ function elpis_log_timing(string $company, string $entitySet, array $query, int 
     ));
 }
 
+function elpis_trace_active(): bool
+{
+    return is_array($GLOBALS['ELPIS_LINE_TRACE'] ?? null);
+}
+
+function elpis_trace_item(): string
+{
+    return strtoupper(trim((string) ($GLOBALS['ELPIS_TRACE_ITEM'] ?? '')));
+}
+
+function elpis_trace_wants_item(string $itemNo): bool
+{
+    $filter = elpis_trace_item();
+
+    return $filter === '' || strtoupper(trim($itemNo)) === $filter;
+}
+
+function elpis_trace(string $step, array $data = []): void
+{
+    if (!elpis_trace_active()) {
+        return;
+    }
+
+    if (count($GLOBALS['ELPIS_LINE_TRACE']) >= 500) {
+        return;
+    }
+
+    $GLOBALS['ELPIS_LINE_TRACE'][] = array_merge(['step' => $step], $data);
+}
+
 function elpis_odata_eq_list(string $field, array $values, bool $numeric = false): string
 {
     $parts = [];
@@ -284,10 +314,29 @@ function elpis_try_fetch_rows(string $company, string $entitySet, array $query, 
     // door alsof er geen rijen waren. Alleen elpis.timing cache=error bevat de melding.
     $startedAt = microtime(true);
     try {
-        return elpis_fetch_rows($company, $entitySet, $query, $ttl);
+        $rows = elpis_fetch_rows($company, $entitySet, $query, $ttl);
+        elpis_trace('odata', [
+            'entity' => $entitySet,
+            'filter' => (string) ($query['$filter'] ?? ''),
+            'rows' => count($rows),
+            'ttl' => $ttl,
+            'live' => !empty($GLOBALS['ELPIS_LIVE_FETCH']),
+            'error' => '',
+        ]);
+
+        return $rows;
     } catch (Throwable $error) {
         elpis_log_timing($company, $entitySet, $query, 0, $startedAt, 'error');
-        error_log('elpis.timing error entity=' . $entitySet . ' message=' . str_replace(["\n", "\r"], ' ', $error->getMessage()));
+        $message = str_replace(["\n", "\r"], ' ', $error->getMessage());
+        error_log('elpis.timing error entity=' . $entitySet . ' message=' . $message);
+        elpis_trace('odata', [
+            'entity' => $entitySet,
+            'filter' => (string) ($query['$filter'] ?? ''),
+            'rows' => 0,
+            'ttl' => $ttl,
+            'live' => !empty($GLOBALS['ELPIS_LIVE_FETCH']),
+            'error' => $message,
+        ]);
 
         return [];
     }
@@ -912,8 +961,7 @@ function elpis_normalize_planning_line_row(array $row): array
     );
     $materialStatus = strtoupper(trim((string) ($row['KVT_Status_Material'] ?? '')));
     $planning = elpis_planning_date_from_row($row);
-
-    return array_merge($quantities, [
+    $line = array_merge($quantities, [
         'job_task_no' => trim((string) ($row['Job_Task_No'] ?? '')),
         'job_contract_entry_no' => (int) ($row['Job_Contract_Entry_No'] ?? 0),
         'work_order_no' => trim((string) ($row['LVS_Work_Order_No'] ?? '')),
@@ -940,6 +988,33 @@ function elpis_normalize_planning_line_row(array $row): array
             ? elpis_material_status_label($materialStatus)
             : '',
         'line_no' => (int) ($row['Line_No'] ?? 0),
+    ]);
+    $qtySource = $purchaseOrderNo !== ''
+        ? 'WerkordersLines.Quantity via elpis_line_quantities; Outstanding_Quantity nog niet gezet'
+        : 'WerkordersLines.Quantity, geen inkoopordernummer';
+    elpis_trace_normalized_line($line, $qtySource);
+
+    return $line;
+}
+
+function elpis_trace_normalized_line(array $line, string $qtySource): void
+{
+    if (!elpis_trace_wants_item((string) ($line['item_no'] ?? ''))) {
+        return;
+    }
+
+    elpis_trace('normalize', [
+        'item_no' => (string) ($line['item_no'] ?? ''),
+        'line_no' => (int) ($line['line_no'] ?? 0),
+        'job_task_no' => (string) ($line['job_task_no'] ?? ''),
+        'work_order_no' => (string) ($line['work_order_no'] ?? ''),
+        'purchase_order_no' => (string) ($line['purchase_order_no'] ?? ''),
+        'purchase_order_line_no' => (int) ($line['purchase_order_line_no'] ?? 0),
+        'quantity' => (float) ($line['quantity'] ?? 0),
+        'qty_ordered' => (float) ($line['qty_ordered'] ?? 0),
+        'qty_open' => (float) ($line['qty_open'] ?? 0),
+        'qty_received' => (float) ($line['qty_received'] ?? 0),
+        'qty_source' => $qtySource,
     ]);
 }
 
@@ -1361,6 +1436,15 @@ function elpis_attach_inkoop_planning_rows(array $linesByProject, array $inkoopR
             }
             $row = $byPlanningKey[$planningKey];
             if (elpis_planning_line_has_purchase_link($line)) {
+                if (elpis_trace_wants_item((string) ($line['item_no'] ?? ''))) {
+                    elpis_trace('inkoop', [
+                        'item_no' => (string) ($line['item_no'] ?? ''),
+                        'line_no' => (int) ($line['line_no'] ?? 0),
+                        'action' => 'paar-op-planningsregel-blijft',
+                        'purchase_order_no' => (string) ($line['purchase_order_no'] ?? ''),
+                        'purchase_order_line_no' => (int) ($line['purchase_order_line_no'] ?? 0),
+                    ]);
+                }
                 continue;
             }
             $linesByProject[$projectNo][$index] = elpis_merge_inkoop_planning_line($line, $row);
@@ -2609,36 +2693,84 @@ function elpis_apply_receipt_expectations(array $linesByProject, array $reservat
 function elpis_match_purchase_line(array $line, array $byDocLine, array $byDocItem): ?array
 {
     $documentNo = strtoupper(trim((string) ($line['purchase_order_no'] ?? '')));
-    if ($documentNo === '') {
-        return null;
-    }
-
     $itemNo = strtoupper(trim((string) ($line['item_no'] ?? '')));
     $purchaseLineNo = (int) ($line['purchase_order_line_no'] ?? 0);
     $exactOnly = trim((string) ($line['work_order_no'] ?? '')) === '';
-    if ($purchaseLineNo > 0 && isset($byDocLine[$documentNo . '|' . $purchaseLineNo]) && is_array($byDocLine[$documentNo . '|' . $purchaseLineNo])) {
+    $matched = null;
+    $reason = 'no_document';
+    if ($documentNo === '') {
+        $reason = 'no_document';
+    } elseif ($purchaseLineNo > 0 && isset($byDocLine[$documentNo . '|' . $purchaseLineNo]) && is_array($byDocLine[$documentNo . '|' . $purchaseLineNo])) {
         $candidate = $byDocLine[$documentNo . '|' . $purchaseLineNo];
         $candidateItem = strtoupper(trim((string) ($candidate['item_no'] ?? '')));
         if ($candidateItem === '' || $itemNo === '' || $candidateItem === $itemNo) {
-            return $candidate;
-        }
-        if ($exactOnly) {
-            return null;
+            $matched = $candidate;
+            $reason = 'document_line';
+        } elseif ($exactOnly) {
+            $reason = 'item_mismatch';
         }
     } elseif ($exactOnly) {
+        $reason = $purchaseLineNo > 0 ? 'document_line_missing' : 'no_line_no';
+    }
+
+    if ($matched === null && $documentNo !== '' && !$exactOnly) {
+        if ($itemNo === '') {
+            $reason = 'no_item';
+        } else {
+            $candidates = $byDocItem[$documentNo . '|' . $itemNo] ?? [];
+            if (count($candidates) === 1 && is_array($candidates[0])) {
+                $matched = $candidates[0];
+                $reason = 'document_item';
+            } else {
+                $reason = 'item_fallback_ambiguous';
+            }
+        }
+    }
+
+    if (elpis_trace_wants_item((string) ($line['item_no'] ?? ''))) {
+        $indexed = [];
+        foreach ($byDocLine as $key => $purchaseLine) {
+            if (!is_string($key) || !str_starts_with($key, $documentNo . '|')) {
+                continue;
+            }
+            if (count($indexed) >= 30) {
+                break;
+            }
+            $indexed[] = $key;
+        }
+        elpis_trace('match', [
+            'item_no' => (string) ($line['item_no'] ?? ''),
+            'line_no' => (int) ($line['line_no'] ?? 0),
+            'work_order_no' => (string) ($line['work_order_no'] ?? ''),
+            'purchase_order_no' => (string) ($line['purchase_order_no'] ?? ''),
+            'purchase_order_line_no' => $purchaseLineNo,
+            'reason' => $reason,
+            'exact_only' => $exactOnly,
+            'indexed_lines' => $indexed,
+            'purchase' => elpis_trace_purchase_line($matched),
+        ]);
+    }
+
+    return $matched;
+}
+
+function elpis_trace_purchase_line(?array $purchase): ?array
+{
+    if (!is_array($purchase)) {
         return null;
     }
 
-    if ($itemNo === '') {
-        return null;
-    }
-
-    $candidates = $byDocItem[$documentNo . '|' . $itemNo] ?? [];
-    if (count($candidates) === 1 && is_array($candidates[0])) {
-        return $candidates[0];
-    }
-
-    return null;
+    return [
+        'document_no' => (string) ($purchase['document_no'] ?? ''),
+        'line_no' => (int) ($purchase['line_no'] ?? 0),
+        'item_no' => (string) ($purchase['item_no'] ?? ''),
+        'job_no' => (string) ($purchase['job_no'] ?? ''),
+        'job_task_no' => (string) ($purchase['job_task_no'] ?? ''),
+        'job_line_type' => (string) ($purchase['job_line_type'] ?? ''),
+        'quantity' => $purchase['quantity'] ?? null,
+        'outstanding_qty' => $purchase['outstanding_qty'] ?? null,
+        'completely_received' => !empty($purchase['completely_received']),
+    ];
 }
 
 function elpis_apply_ledger_receipt_quantities(string $projectNo, array $lines, array $receiptQty): array
@@ -2684,6 +2816,16 @@ function elpis_apply_ledger_receipt_quantities(string $projectNo, array $lines, 
             $lines[$index]['qty_open'] = max(0.0, $ordered - $quantity);
             $lines[$index]['qty_to_order'] = 0.0;
             $lines[$index] = elpis_refresh_receipt_state($lines[$index]);
+            if (elpis_trace_wants_item((string) ($lines[$index]['item_no'] ?? ''))) {
+                elpis_trace('ledger', [
+                    'item_no' => (string) ($lines[$index]['item_no'] ?? ''),
+                    'line_no' => (int) ($lines[$index]['line_no'] ?? 0),
+                    'qty_ordered' => (float) ($lines[$index]['qty_ordered'] ?? 0),
+                    'qty_open' => (float) ($lines[$index]['qty_open'] ?? 0),
+                    'qty_received' => (float) ($lines[$index]['qty_received'] ?? 0),
+                    'qty_source' => 'ItemLedgerEntries.Quantity dekt de plannings-Quantity op project|taak|artikel',
+                ]);
+            }
         }
     }
 
@@ -2726,6 +2868,22 @@ function elpis_finalize_line(
             $line['qty_ordered'] = (float) $purchase['quantity'];
         }
         $line = elpis_apply_purchase_line_quantities($line);
+        $qtySource = $samePurchaseLine
+            ? 'PurchaseLines.Quantity en Outstanding_Quantity'
+            : 'PurchaseLines gekoppeld zonder Quantity op document+regel';
+    } else {
+        $qtySource = 'ongewijzigd na elpis_line_quantities';
+    }
+    if (elpis_trace_wants_item((string) ($line['item_no'] ?? ''))) {
+        elpis_trace('finalize', [
+            'item_no' => (string) ($line['item_no'] ?? ''),
+            'line_no' => (int) ($line['line_no'] ?? 0),
+            'qty_ordered' => (float) ($line['qty_ordered'] ?? 0),
+            'qty_open' => (float) ($line['qty_open'] ?? 0),
+            'qty_received' => (float) ($line['qty_received'] ?? 0),
+            'qty_source' => $qtySource,
+            'purchase' => elpis_trace_purchase_line(is_array($purchase) ? $purchase : null),
+        ]);
     }
 
     $kvtDate = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
@@ -3078,8 +3236,17 @@ function elpis_load_project_modal_lines(string $company, string $projectNo, bool
     if (!$refresh) {
         $cached = elpis_read_project_cache($company, $projectNo);
         if (is_array($cached) && is_array($cached['lines'] ?? null)) {
+            elpis_trace('project-cache', [
+                'hit' => true,
+                'version' => (int) ($cached['version'] ?? 0),
+                'cached_at' => (int) ($cached['cached_at'] ?? 0),
+            ]);
+
             return $cached['lines'];
         }
+        elpis_trace('project-cache', ['hit' => false, 'skipped_because' => 'miss-of-versie']);
+    } else {
+        elpis_trace('project-cache', ['hit' => false, 'skipped_because' => 'refresh']);
     }
 
     $load = static function () use ($company, $projectNo): array {
@@ -3239,6 +3406,258 @@ function elpis_line_public_payload(array $line, string $projectNo): array
         'receipt_state' => (string) ($line['receipt_state'] ?? ''),
         'search' => elpis_line_search_blob($line, $projectNo),
         'tooltips' => elpis_line_tooltips($line),
+    ];
+}
+
+function elpis_debug_project_cache_meta(string $company, string $projectNo): array
+{
+    $path = elpis_project_cache_path($company, $projectNo);
+    $meta = [
+        'layer' => 'project',
+        'version_checked' => true,
+        'code_version' => ELPI_PROJECT_CACHE_VERSION,
+        'present' => is_file($path),
+    ];
+    if (!is_file($path)) {
+        return $meta;
+    }
+
+    $decoded = json_decode((string) file_get_contents($path), true);
+    $fileVersion = is_array($decoded) ? (int) ($decoded['version'] ?? 0) : 0;
+    $expiresAt = is_array($decoded) ? (int) ($decoded['expires_at'] ?? 0) : 0;
+    $meta['file_version'] = $fileVersion;
+    $meta['version_match'] = is_array($decoded) && $fileVersion === ELPI_PROJECT_CACHE_VERSION;
+    $meta['cached_at'] = is_array($decoded) ? (int) ($decoded['cached_at'] ?? 0) : 0;
+    $meta['expires_at'] = $expiresAt;
+    $meta['expired'] = $expiresAt < time();
+    $meta['filemtime'] = (int) filemtime($path);
+    $meta['line_count'] = is_array($decoded['lines'] ?? null) ? count($decoded['lines']) : 0;
+
+    return $meta;
+}
+
+function elpis_debug_odata_cache_meta(string $projectNo): array
+{
+    $meta = [
+        'layer' => 'odata_file',
+        'version_checked' => false,
+        'note' => 'ELPI_PROJECT_CACHE_VERSION geldt niet voor deze bestanden. Ververs nu wist alleen het bestand van de opgevraagde URL op het directe pad; het Mímir-pad slaat deze laag over.',
+        'files' => [],
+    ];
+    if (!function_exists('cache_base_dir') || !is_dir(cache_base_dir())) {
+        return $meta;
+    }
+
+    $entries = @scandir(cache_base_dir());
+    if (!is_array($entries)) {
+        return $meta;
+    }
+
+    $seen = 0;
+    foreach ($entries as $entry) {
+        if (!str_ends_with(strtolower($entry), '.json')) {
+            continue;
+        }
+        $seen++;
+        if ($seen > 200 || count($meta['files']) >= 20) {
+            break;
+        }
+        $path = cache_base_dir() . DIRECTORY_SEPARATOR . $entry;
+        $raw = @file_get_contents($path);
+        if ($raw === false || !str_contains($raw, $projectNo)) {
+            continue;
+        }
+        $decoded = json_decode($raw, true);
+        $fileMeta = is_array($decoded) && is_array($decoded['_meta'] ?? null) ? $decoded['_meta'] : [];
+        $source = (string) ($fileMeta['source_url'] ?? '');
+        if ($source !== '' && !str_contains($source, $projectNo)) {
+            continue;
+        }
+        $meta['files'][] = [
+            'cached_at' => (int) ($fileMeta['cached_at'] ?? 0),
+            'expires_at' => (int) ($fileMeta['expires_at'] ?? 0),
+            'filemtime' => (int) filemtime($path),
+            'source' => substr($source, 0, 300),
+            'version_checked' => false,
+        ];
+    }
+
+    return $meta;
+}
+
+function elpis_debug_cache_layers(string $company, string $projectNo): array
+{
+    return [
+        'project' => elpis_debug_project_cache_meta($company, $projectNo),
+        'odata_file' => elpis_debug_odata_cache_meta($projectNo),
+        'mimir' => [
+            'layer' => 'mimir',
+            'version_checked' => false,
+            'enabled' => function_exists('odata_mimir_enabled') && odata_mimir_enabled(),
+            'max_age_on_refresh' => 0,
+            'note' => 'Mímir bewaart BC-antwoorden op max_age. ELPI_PROJECT_CACHE_VERSION zit niet in die sleutel.',
+        ],
+        'http' => [
+            'layer' => 'http',
+            'version_checked' => false,
+            'cache_control' => 'no-store',
+            'browser_fetch' => 'cache: no-store',
+        ],
+        'memo' => [
+            'layer' => 'request_memo',
+            'version_checked' => false,
+            'reset_on_refresh' => true,
+        ],
+        'browser' => [
+            'layer' => 'browser',
+            'version_checked' => false,
+            'localStorage' => false,
+            'sessionStorage' => 'alleen elpis_skip_loader, geen regelcijfers',
+        ],
+        'mail' => [
+            'layer' => 'pm_mail',
+            'version_checked' => false,
+            'feeds_modal' => false,
+        ],
+    ];
+}
+
+function elpis_debug_conclusion(array $lines, array $trace): string
+{
+    $cacheHit = false;
+    $purchaseRows = 0;
+    $purchaseErrors = [];
+    $finalizes = [];
+    $normalizes = [];
+    foreach ($trace as $event) {
+        if (!is_array($event)) {
+            continue;
+        }
+        $step = (string) ($event['step'] ?? '');
+        if ($step === 'normalize') {
+            $normalizes[] = $event;
+        } elseif ($step === 'finalize') {
+            $finalizes[] = $event;
+        } elseif ($step === 'project-cache' && !empty($event['hit'])) {
+            $cacheHit = true;
+        } elseif ($step === 'odata' && (string) ($event['entity'] ?? '') === ELPI_PURCHASE_ORDER_LINE_ENTITY) {
+            $purchaseRows += (int) ($event['rows'] ?? 0);
+            if ((string) ($event['error'] ?? '') !== '') {
+                $purchaseErrors[] = (string) $event['error'];
+            }
+        }
+    }
+
+    if ($cacheHit) {
+        return 'De modal las de projectcache. Ververs nu slaat die laag over; deze aanroep niet.';
+    }
+    if ($normalizes === []) {
+        return 'WerkordersLines leverde deze artikelregel niet. De modal heeft geen andere tabel voor regels zonder werkorder.';
+    }
+
+    $parts = [];
+    foreach ($finalizes as $finalize) {
+        $purchase = is_array($finalize['purchase'] ?? null) ? $finalize['purchase'] : null;
+        $label = (string) ($finalize['item_no'] ?? '') . '/' . (string) ($finalize['line_no'] ?? '');
+        $numbers = (string) ($finalize['qty_ordered'] ?? '') . '/' . (string) ($finalize['qty_open'] ?? '') . '/' . (string) ($finalize['qty_received'] ?? '');
+        if (is_array($purchase)) {
+            $parts[] = $label . ' toont ' . $numbers . ' van PurchaseLines ' . (string) ($purchase['document_no'] ?? '') . '/' . (string) ($purchase['line_no'] ?? '') . '.';
+            continue;
+        }
+        $parts[] = $label . ' toont ' . $numbers . ' uit WerkordersLines.Quantity. finalize liep, PurchaseLines is niet toegepast.';
+    }
+    if ($purchaseErrors !== []) {
+        $parts[] = 'PurchaseLines-fout: ' . $purchaseErrors[0];
+    } elseif ($purchaseRows === 0) {
+        $parts[] = 'De PurchaseLines-queries gaven 0 rijen.';
+    }
+
+    return implode(' ', $parts);
+}
+
+function elpis_debug_project_line(string $company, string $projectNo, string $itemNo, bool $refresh): array
+{
+    $company = trim($company);
+    $projectNo = trim($projectNo);
+    $itemNo = strtoupper(trim($itemNo));
+    $cacheBefore = elpis_debug_cache_layers($company, $projectNo);
+    $GLOBALS['ELPIS_LINE_TRACE'] = [];
+    $GLOBALS['ELPIS_TRACE_ITEM'] = $itemNo;
+    $error = '';
+    $lines = [];
+    try {
+        $lines = elpis_load_project_modal_lines($company, $projectNo, $refresh);
+    } catch (Throwable $caught) {
+        $error = str_replace(["\n", "\r"], ' ', $caught->getMessage());
+    }
+    $trace = is_array($GLOBALS['ELPIS_LINE_TRACE'] ?? null) ? $GLOBALS['ELPIS_LINE_TRACE'] : [];
+    unset($GLOBALS['ELPIS_LINE_TRACE'], $GLOBALS['ELPIS_TRACE_ITEM']);
+
+    $shown = [];
+    foreach ($lines as $line) {
+        if (!is_array($line)) {
+            continue;
+        }
+        if ($itemNo !== '' && strtoupper(trim((string) ($line['item_no'] ?? ''))) !== $itemNo) {
+            continue;
+        }
+        $payload = elpis_line_public_payload($line, $projectNo);
+        $shown[] = [
+            'item_no' => (string) ($line['item_no'] ?? ''),
+            'line_no' => (int) ($line['line_no'] ?? 0),
+            'job_task_no' => (string) ($line['job_task_no'] ?? ''),
+            'work_order_no' => (string) ($line['work_order_no'] ?? ''),
+            'purchase_order_no' => (string) ($line['purchase_order_no'] ?? ''),
+            'purchase_order_line_no' => (int) ($line['purchase_order_line_no'] ?? 0),
+            'quantity' => (float) ($line['quantity'] ?? 0),
+            'qty_ordered' => (float) ($payload['qty_ordered'] ?? 0),
+            'qty_open' => (float) ($payload['qty_open'] ?? 0),
+            'qty_received' => (float) ($payload['qty_received'] ?? 0),
+            'display' => [
+                'ordered' => (string) ($payload['qty_ordered_display'] ?? ''),
+                'open' => (string) ($payload['qty_open_display'] ?? ''),
+                'received' => (string) ($payload['qty_received_display'] ?? ''),
+                'expected_receipt' => (string) ($payload['expected_receipt'] ?? ''),
+            ],
+            'receipt_state' => (string) ($payload['receipt_state'] ?? ''),
+            'purchase_outstanding_qty' => $line['purchase_outstanding_qty'] ?? null,
+        ];
+    }
+
+    $fetches = [];
+    $steps = [];
+    foreach ($trace as $event) {
+        if (!is_array($event)) {
+            continue;
+        }
+        if (($event['step'] ?? '') === 'odata') {
+            $fetches[] = $event;
+            continue;
+        }
+        $steps[] = $event;
+    }
+
+    return [
+        'project' => $projectNo,
+        'company' => $company,
+        'debug_line' => $itemNo,
+        'refresh' => $refresh,
+        'code_version' => ELPI_PROJECT_CACHE_VERSION,
+        'error' => $error,
+        'display_path' => [
+            'page' => 'index.php',
+            'endpoint' => 'project_lines.php',
+            'render' => 'renderLines schrijft qty_ordered_display, qty_open_display en qty_received_display uit die JSON',
+            'function' => 'elpis_load_project_modal_lines',
+            'separate_table' => false,
+            'client_calculation' => false,
+        ],
+        'cache_before' => $cacheBefore,
+        'cache_after' => elpis_debug_cache_layers($company, $projectNo),
+        'fetches' => $fetches,
+        'steps' => $steps,
+        'lines' => $shown,
+        'conclusion' => elpis_debug_conclusion($shown, $trace),
     ];
 }
 
