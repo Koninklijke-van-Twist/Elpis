@@ -91,6 +91,10 @@ if (!str_contains(elpis_purchase_documents_filter(['PO12606033']), "Document_Typ
 if (str_contains(elpis_purchase_documents_filter(['PO1']), 'Outstanding_Quantity') || filter_ors_cross_fields(elpis_purchase_documents_filter(['PO1', 'PO2']))) {
     fail('inkoopfilter mag niet bedrijfswijd of over velden OR-en');
 }
+$jobPurchaseFilter = elpis_purchase_jobs_filter(['153390']);
+if (!str_contains($jobPurchaseFilter, "Document_Type eq 'Order'") || !str_contains($jobPurchaseFilter, "Job_No eq '153390'") || str_contains($jobPurchaseFilter, 'Job_Task_No') || str_contains($jobPurchaseFilter, 'Job_Line_Type') || str_contains($jobPurchaseFilter, 'Outstanding_Quantity') || filter_ors_cross_fields($jobPurchaseFilter)) {
+    fail('inkoopregels per project filteren niet op taak of regeltype: ' . $jobPurchaseFilter);
+}
 
 $stockFilter = elpis_item_stock_reservation_filter(['PI20002946']);
 foreach (["Reservation_Status eq 'Reservation'", 'Positive eq false', 'Source_Type eq 1003', 'Source_Type eq 901', 'Source_Type eq 37', "Item_No eq 'PI20002946'"] as $part) {
@@ -116,8 +120,8 @@ if (!str_contains($ledger, "Entry_Type eq 'Purchase'") || !str_contains($ledger,
 if (!str_contains(elpis_item_ledger_select_fields(), 'Quantity')) {
     fail('ontvangstposten moeten Quantity ophalen');
 }
-if (!str_contains(elpis_purchase_line_select_fields(), 'Outstanding_Quantity') || !str_contains(elpis_purchase_line_select_fields(), 'LVS_Completely_Received') || !str_contains(elpis_purchase_line_select_fields(), 'Quantity')) {
-    fail('inkoopselect moet Quantity, Outstanding_Quantity en LVS_Completely_Received lezen');
+if (!str_contains(elpis_purchase_line_select_fields(), 'Outstanding_Quantity') || !str_contains(elpis_purchase_line_select_fields(), 'LVS_Completely_Received') || !str_contains(elpis_purchase_line_select_fields(), 'Quantity') || !str_contains(elpis_purchase_line_select_fields(), 'Job_No') || !str_contains(elpis_purchase_line_select_fields(), 'Job_Task_No') || !str_contains(elpis_purchase_line_select_fields(), 'Job_Line_Type')) {
+    fail('inkoopselect moet Quantity, Outstanding_Quantity, LVS_Completely_Received, Job_No, Job_Task_No en Job_Line_Type lezen');
 }
 
 $jobFilters = elpis_job_scoped_filters(array_map(static fn (int $i): string => 'P' . $i, range(1, 13)));
@@ -751,15 +755,14 @@ if (($shownStatusTFull['material_status'] ?? '') !== 'T' || ($shownStatusTFull['
     fail('materiaalstatus T zonder echte ontvangst blijft te laat en rood: ' . json_encode($shownStatusTFull));
 }
 
-// Zelfde projectstroom als live 153390. WerkordersLines heeft soms een ander
-// regelnr dan PurchaseLines; zonder werkorder telt alleen Document_No + Line_No.
-// De projectregel van PI20000438 heeft Quantity 112, de inkoopregel Quantity 1.
+// Project 153390. De planningsregel heeft LVS_Purchase_Order_No en Line_No al.
+// PI20000438 heeft Quantity 112; de inkoopregel Quantity 1.
 $openPurchaseCases = [
     ['item_no' => 'PI24003010', 'description' => 'PI24003010', 'work_order_no' => '4066162', 'job_task_no' => '100', 'line_no' => 8000, 'purchase_order_no' => '4500124003', 'purchase_order_line_no' => 10000, 'quantity' => 2.0, 'material_status' => 'X', 'expect_received' => false, 'ordered' => 2.0, 'open' => 2.0, 'received' => 0.0],
     ['item_no' => 'PI28127010', 'description' => 'PI28127010', 'work_order_no' => '4066162', 'job_task_no' => '100', 'line_no' => 13000, 'purchase_order_no' => '4500128127', 'purchase_order_line_no' => 10000, 'quantity' => 1.0, 'material_status' => 'X', 'expect_received' => false, 'ordered' => 1.0, 'open' => 1.0, 'received' => 0.0],
     ['item_no' => 'PI27751010', 'description' => 'PI27751010', 'work_order_no' => '4066164', 'job_task_no' => '100', 'line_no' => 14000, 'purchase_order_no' => '4500127751', 'purchase_order_line_no' => 10000, 'quantity' => 1.0, 'material_status' => 'X', 'expect_received' => false, 'ordered' => 1.0, 'open' => 1.0, 'received' => 0.0],
-    ['item_no' => 'PI20001429', 'description' => 'Spoedlevering', 'work_order_no' => '', 'job_task_no' => '200-000-050', 'line_no' => 40000, 'purchase_order_no' => 'PO12602236', 'purchase_order_line_no' => 10000, 'quantity' => 1.0, 'material_status' => 'O', 'expect_received' => true, 'ordered' => 1.0, 'open' => 0.0, 'received' => 1.0, 'inkoop_task' => '900', 'inkoop_line' => 10000, 'purchase_line_no' => 20000],
-    ['item_no' => 'PI20000438', 'description' => 'M24 bouten', 'work_order_no' => '', 'job_task_no' => '200-000-060', 'line_no' => 50000, 'purchase_order_no' => 'PO12600678', 'purchase_order_line_no' => 20000, 'quantity' => 112.0, 'material_status' => 'O', 'expect_received' => true, 'ordered' => 1.0, 'open' => 0.0, 'received' => 1.0, 'inkoop_task' => '901', 'inkoop_line' => 11000, 'purchase_line_no' => 10000, 'order_uom' => 112.0],
+    ['item_no' => 'PI20001429', 'description' => 'Spoedlevering', 'work_order_no' => '', 'job_task_no' => '4066161', 'line_no' => 2525000, 'purchase_order_no' => 'PO12602236', 'purchase_order_line_no' => 20000, 'quantity' => 1.0, 'material_status' => 'O', 'expect_received' => true, 'ordered' => 1.0, 'open' => 0.0, 'received' => 1.0, 'inkoop_task' => '4066161', 'inkoop_line' => 20000, 'purchase_line_no' => 20000],
+    ['item_no' => 'PI20000438', 'description' => 'M24 bouten', 'work_order_no' => '', 'job_task_no' => '4066162', 'line_no' => 383000, 'purchase_order_no' => 'PO12600678', 'purchase_order_line_no' => 10000, 'quantity' => 112.0, 'material_status' => 'O', 'expect_received' => true, 'ordered' => 1.0, 'open' => 0.0, 'received' => 1.0, 'inkoop_task' => '4066162', 'inkoop_line' => 10000, 'purchase_line_no' => 10000, 'order_uom' => 112.0],
 ];
 $openPurchaseLines = [];
 $openPurchaseInkoop = [];
@@ -794,7 +797,7 @@ foreach ($openPurchaseCases as $case) {
         'No' => $case['item_no'],
         'LVS_Work_Order_No' => $case['work_order_no'],
         'LVS_Purchase_Order_No' => $case['purchase_order_no'],
-        'LVS_Purchase_Order_Line_No' => $purchaseLineNo,
+        'LVS_Purchase_Order_Line_No' => $case['expect_received'] ? 99999 : $purchaseLineNo,
         'LVS_Quantity_Order_UoM' => (float) ($case['order_uom'] ?? $case['quantity']),
         'LVS_Outstanding_Qty_Base' => (float) ($case['order_uom'] ?? $case['quantity']),
         'LVS_Completely_Received' => false,
@@ -808,7 +811,7 @@ foreach ($openPurchaseCases as $case) {
         'Outstanding_Quantity' => $case['expect_received'] ? 0 : $case['quantity'],
         'LVS_Completely_Received' => false,
     ];
-    if ($case['expect_received']) {
+    if ($case['expect_received'] && (int) $case['purchase_order_line_no'] !== $purchaseLineNo) {
         $openPurchaseOrders[] = [
             'Document_No' => $case['purchase_order_no'],
             'Line_No' => $case['purchase_order_line_no'],
@@ -1099,12 +1102,33 @@ foreach ($calls as $call) {
     if (!isset($call['query']['$select']) || filter_ors_cross_fields($filter)) {
         fail('query mist select of OR-t over velden: ' . json_encode($call));
     }
-    if ($call['entity'] === ELPI_PURCHASE_ORDER_LINE_ENTITY && !str_contains($filter, "Document_No eq 'PO12606033'")) {
-        fail('inkoop is niet tot het document beperkt: ' . $filter);
+    if ($call['entity'] === ELPI_PURCHASE_ORDER_LINE_ENTITY) {
+        $byDocument = str_contains($filter, "Document_No eq 'PO12606033'");
+        $byJob = str_contains($filter, "Job_No eq 'PRJ2606522'") && !str_contains($filter, 'Job_Task_No') && !str_contains($filter, 'Job_Line_Type');
+        if ((!$byDocument && !$byJob) || str_contains($filter, 'Job_Task_No') || str_contains($filter, 'Job_Line_Type') || str_contains($filter, 'Outstanding_Quantity')) {
+            fail('inkoop is niet tot document of project beperkt, zonder taakfilter: ' . $filter);
+        }
     }
     if ($call['entity'] === ELPI_ITEM_LIST_ENTITY && !str_contains($filter, "No eq 'PI20002946'")) {
         fail('voorraad is niet tot het artikel beperkt: ' . $filter);
     }
+}
+$sawPurchaseDocument = false;
+$sawPurchaseJob = false;
+foreach ($calls as $call) {
+    if (($call['entity'] ?? '') !== ELPI_PURCHASE_ORDER_LINE_ENTITY) {
+        continue;
+    }
+    $filter = (string) ($call['query']['$filter'] ?? '');
+    if (str_contains($filter, "Document_No eq 'PO12606033'")) {
+        $sawPurchaseDocument = true;
+    }
+    if (str_contains($filter, "Job_No eq 'PRJ2606522'") && !str_contains($filter, 'Job_Task_No')) {
+        $sawPurchaseJob = true;
+    }
+}
+if (!$sawPurchaseDocument || !$sawPurchaseJob) {
+    fail('inkoopregels worden per document en per project opgehaald: ' . json_encode($calls));
 }
 if (elpis_fetch_reservation_entries('Koninklijke van Twist') !== [] || elpis_fetch_open_purchase_order_lines('Koninklijke van Twist') !== []) {
     fail('ongefilterde fetches mogen geen rijen teruggeven');
@@ -1176,8 +1200,8 @@ file_put_contents($stalePath, json_encode([
 if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
     fail('projectcache zonder versie wordt genegeerd');
 }
-if (ELPI_PROJECT_CACHE_VERSION !== 6) {
-    fail('projectcacheversie moet 6 zijn zodat regels zonder werkorder opnieuw aan de inkoopregel gekoppeld worden');
+if (ELPI_PROJECT_CACHE_VERSION !== 7) {
+    fail('projectcacheversie moet 7 zijn zodat de inkoopregel via document en regelnummer opnieuw gekoppeld wordt');
 }
 $previousVersionPath = elpis_project_cache_path('Koninklijke van Twist', '153390');
 file_put_contents($previousVersionPath, json_encode([
@@ -1218,6 +1242,200 @@ if (!str_contains($projectLines, 'elpis_load_project_modal_lines') || !str_conta
 }
 if (!str_contains($index, 'elpis_nightly_needs_run') || !str_contains($index, 'elpis.company.choose')) {
     fail('eerst nightly-check en bedrijfskeuze');
+}
+
+// BC-structuur project 153390. PurchaseLines.Job_Task_No is het werkordernummer
+// en Job_Line_Type is leeg. De planningsregel toont geen werkorder, maar heeft
+// wel LVS_Purchase_Order_No + LVS_Purchase_Order_Line_No. Ontvangstposten
+// PWR2611991 en PWR2606258 dekken niet de plannings-Quantity 112.
+$bcPlanning = [
+    elpis_normalize_planning_line_row([
+        'Job_No' => '153390',
+        'Job_Task_No' => '4066161',
+        'Line_No' => 2525000,
+        'No' => 'PI20001429',
+        'Description' => 'Spoedlevering',
+        'Quantity' => 1,
+        'Remaining_Qty' => 1,
+        'LVS_Work_Order_No' => '',
+        'LVS_Purchase_Order_No' => 'PO12602236',
+        'LVS_Purchase_Order_Line_No' => 20000,
+        'KVT_Expected_Receipt_Date' => '2026-09-01',
+        'KVT_Status_Material' => 'O',
+    ]),
+    elpis_normalize_planning_line_row([
+        'Job_No' => '153390',
+        'Job_Task_No' => '4066161',
+        'Line_No' => 2585000,
+        'No' => 'PI20001429',
+        'Description' => 'Spoedlevering',
+        'Quantity' => 1,
+        'Remaining_Qty' => 0,
+        'LVS_Work_Order_No' => '4066161',
+        'LVS_Purchase_Order_No' => '',
+        'LVS_Purchase_Order_Line_No' => 0,
+        'KVT_Expected_Receipt_Date' => '2026-09-01',
+        'KVT_Status_Material' => 'G',
+    ]),
+    elpis_normalize_planning_line_row([
+        'Job_No' => '153390',
+        'Job_Task_No' => '4066162',
+        'Line_No' => 383000,
+        'No' => 'PI20000438',
+        'Description' => 'M24 bouten',
+        'Quantity' => 112,
+        'Remaining_Qty' => 112,
+        'LVS_Work_Order_No' => '',
+        'LVS_Purchase_Order_No' => 'PO12600678',
+        'LVS_Purchase_Order_Line_No' => 10000,
+        'KVT_Expected_Receipt_Date' => '2026-09-01',
+        'KVT_Status_Material' => 'O',
+    ]),
+];
+$bcInkoop = [
+    [
+        'Job_No' => '153390',
+        'Job_Task_No' => '4066161',
+        'Line_No' => 20000,
+        'No' => 'PI20001429',
+        'LVS_Work_Order_No' => '',
+        'LVS_Purchase_Order_No' => 'PO12602236',
+        'LVS_Purchase_Order_Line_No' => 30000,
+        'LVS_Quantity_Order_UoM' => 1,
+        'LVS_Outstanding_Qty_Base' => 1,
+    ],
+    [
+        'Job_No' => '153390',
+        'Job_Task_No' => '4066162',
+        'Line_No' => 10000,
+        'No' => 'PI20000438',
+        'LVS_Work_Order_No' => '',
+        'LVS_Purchase_Order_No' => 'PO12600678',
+        'LVS_Purchase_Order_Line_No' => 20000,
+        'LVS_Quantity_Order_UoM' => 112,
+        'LVS_Outstanding_Qty_Base' => 112,
+    ],
+];
+$bcPurchase = [
+    [
+        'Document_No' => 'PO12602236',
+        'Line_No' => 20000,
+        'No' => 'PI20001429',
+        'Document_Type' => 'Order',
+        'Job_No' => '153390',
+        'Job_Task_No' => '4066161',
+        'Job_Line_Type' => '',
+        'Quantity' => 1,
+        'Outstanding_Quantity' => 0,
+        'LVS_Completely_Received' => false,
+    ],
+    [
+        'Document_No' => 'PO12602236',
+        'Line_No' => 30000,
+        'No' => 'PI20001429',
+        'Document_Type' => 'Order',
+        'Job_No' => '153390',
+        'Job_Task_No' => '',
+        'Job_Line_Type' => '',
+        'Quantity' => 1,
+        'Outstanding_Quantity' => 1,
+        'LVS_Completely_Received' => false,
+    ],
+    [
+        'Document_No' => 'PO12600678',
+        'Line_No' => 10000,
+        'No' => 'PI20000438',
+        'Document_Type' => 'Order',
+        'Job_No' => '153390',
+        'Job_Task_No' => '4066162',
+        'Job_Line_Type' => '',
+        'Quantity' => 1,
+        'Outstanding_Quantity' => 0,
+        'LVS_Completely_Received' => false,
+    ],
+    [
+        'Document_No' => 'PO12600678',
+        'Line_No' => 20000,
+        'No' => 'PI20000438',
+        'Document_Type' => 'Order',
+        'Job_No' => '153390',
+        'Job_Task_No' => '4066162',
+        'Job_Line_Type' => 'Budget',
+        'Quantity' => 112,
+        'Outstanding_Quantity' => 112,
+        'LVS_Completely_Received' => false,
+    ],
+];
+$bcNormalizedPurchase = elpis_normalize_purchase_order_line($bcPurchase[0]);
+if (($bcNormalizedPurchase['job_no'] ?? '') !== '153390' || ($bcNormalizedPurchase['job_task_no'] ?? '') !== '4066161' || ($bcNormalizedPurchase['job_line_type'] ?? 'x') !== '' || (int) ($bcNormalizedPurchase['line_no'] ?? 0) !== 20000) {
+    fail('PurchaseLines met lege Job_Line_Type en taak = werkorder blijven behouden: ' . json_encode($bcNormalizedPurchase));
+}
+$bcLines = elpis_attach_inkoop_planning_rows(['153390' => $bcPlanning], $bcInkoop);
+$bcPurchaseFilters = [];
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity, array $query) use (&$bcPurchaseFilters, $bcPurchase): array {
+    if ($entity === ELPI_ITEM_LEDGER_ENTITY) {
+        return [
+            ['Job_No' => '153390', 'Job_Task_No' => '4066161', 'Item_No' => 'PI20001429', 'Posting_Date' => '2026-09-15', 'Quantity' => 1],
+            ['Job_No' => '153390', 'Job_Task_No' => '4066162', 'Item_No' => 'PI20000438', 'Posting_Date' => '2026-09-15', 'Quantity' => 1],
+        ];
+    }
+    if ($entity === ELPI_WORK_ORDER_ENTITY) {
+        return [['No' => '4066161', 'Description' => 'Werkorder']];
+    }
+    if ($entity !== ELPI_PURCHASE_ORDER_LINE_ENTITY) {
+        return [];
+    }
+    $filter = (string) ($query['$filter'] ?? '');
+    $bcPurchaseFilters[] = $filter . ' select=' . (string) ($query['$select'] ?? '');
+    if (str_contains($filter, 'Job_Task_No') || str_contains($filter, 'Job_Line_Type')) {
+        return [];
+    }
+    if (str_contains($filter, "Job_No eq '153390'")) {
+        return $bcPurchase;
+    }
+
+    return [];
+};
+elpis_reset_fetch_memo();
+$bcResult = elpis_enrich_planning_lines_with_receipts('Koninklijke van Twist', $bcLines);
+unset($GLOBALS['ELPIS_FETCH_OBSERVER']);
+elpis_reset_fetch_memo();
+$sawBcJob = false;
+$sawBcDocument = false;
+foreach ($bcPurchaseFilters as $filter) {
+    if (str_contains($filter, 'Job_Task_No eq') || str_contains($filter, 'Job_Line_Type eq')) {
+        fail('PurchaseLines-filter gebruikt de taak of het regeltype: ' . $filter);
+    }
+    if (str_contains($filter, "Job_No eq '153390'") && str_contains($filter, "Document_Type eq 'Order'") && str_contains($filter, 'Job_Line_Type')) {
+        $sawBcJob = true;
+    }
+    if (str_contains($filter, "Document_No eq 'PO12602236'") && str_contains($filter, "Document_No eq 'PO12600678'")) {
+        $sawBcDocument = true;
+    }
+}
+if (!$sawBcJob || !$sawBcDocument) {
+    fail('PO12602236 en PO12600678 worden per document en per project opgehaald: ' . json_encode($bcPurchaseFilters));
+}
+$bcByLine = [];
+foreach ($bcResult['153390'] ?? [] as $bcLine) {
+    $bcByLine[(int) ($bcLine['line_no'] ?? 0)] = $bcLine;
+}
+$bcSpoed = $bcByLine[2525000] ?? null;
+$bcWorkOrder = $bcByLine[2585000] ?? null;
+$bcBolts = $bcByLine[383000] ?? null;
+if (!is_array($bcSpoed) || !is_array($bcWorkOrder) || !is_array($bcBolts)) {
+    fail('project 153390 mist een planningsregel: ' . json_encode(array_keys($bcByLine)));
+}
+$bcSpoedPayload = elpis_line_public_payload($bcSpoed, '153390');
+if (($bcSpoed['work_order_no'] ?? 'x') !== '' || ($bcSpoed['purchase_order_no'] ?? '') !== 'PO12602236' || (int) ($bcSpoed['purchase_order_line_no'] ?? 0) !== 20000 || abs(elpis_line_shown_ordered_qty($bcSpoed) - 1) > 0.00001 || abs((float) ($bcSpoed['qty_open'] ?? -1)) > 0.00001 || abs(elpis_line_shown_received_qty($bcSpoed) - 1) > 0.00001 || !elpis_line_is_received($bcSpoed) || elpis_line_is_late($bcSpoed) || ($bcSpoed['receipt_state'] ?? '') !== 'received' || ($bcSpoedPayload['expected_receipt'] ?? '') === 'Te laat' || ($bcSpoed['material_status'] ?? '') !== 'O') {
+    fail('PI20001429 volgt PO12602236/20000 als 1/0/1: ' . json_encode($bcSpoedPayload));
+}
+$bcBoltsPayload = elpis_line_public_payload($bcBolts, '153390');
+if (($bcBolts['work_order_no'] ?? 'x') !== '' || ($bcBolts['purchase_order_no'] ?? '') !== 'PO12600678' || (int) ($bcBolts['purchase_order_line_no'] ?? 0) !== 10000 || abs(elpis_line_shown_ordered_qty($bcBolts) - 1) > 0.00001 || abs((float) ($bcBolts['qty_open'] ?? -1)) > 0.00001 || abs(elpis_line_shown_received_qty($bcBolts) - 1) > 0.00001 || abs((float) ($bcBolts['quantity'] ?? 0) - 112) > 0.00001 || !elpis_line_is_received($bcBolts) || elpis_line_is_late($bcBolts) || ($bcBolts['receipt_state'] ?? '') !== 'received' || ($bcBoltsPayload['expected_receipt'] ?? '') === 'Te laat' || ($bcBoltsPayload['qty_ordered'] ?? null) !== 1.0) {
+    fail('PI20000438 toont de inkoopregel 1/0/1 en niet de planningsregel 112: ' . json_encode($bcBoltsPayload));
+}
+if (($bcWorkOrder['work_order_no'] ?? '') !== '4066161' || ($bcWorkOrder['purchase_order_no'] ?? 'x') !== '' || ($bcWorkOrder['material_status'] ?? '') !== 'G' || ($bcWorkOrder['receipt_state'] ?? '') !== 'received') {
+    fail('de werkorderregel 4066161/2585000 blijft los van de inkoopregel: ' . json_encode($bcWorkOrder));
 }
 
 echo "OK\n";
