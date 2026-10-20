@@ -93,7 +93,7 @@ if (str_contains(elpis_purchase_documents_filter(['PO1']), 'Outstanding_Quantity
 }
 
 $stockFilter = elpis_item_stock_reservation_filter(['PI20002946']);
-foreach (["Reservation_Status eq 'Reservation'", 'Positive eq false', 'Source_Type eq 1003', "Item_No eq 'PI20002946'"] as $part) {
+foreach (["Reservation_Status eq 'Reservation'", 'Positive eq false', 'Source_Type eq 1003', 'Source_Type eq 901', 'Source_Type eq 37', "Item_No eq 'PI20002946'"] as $part) {
     if (!str_contains($stockFilter, $part)) {
         fail('voorraadreservering mist ' . $part . ': ' . $stockFilter);
     }
@@ -102,10 +102,10 @@ if (str_contains($stockFilter, 'Positive eq true') || str_contains($stockFilter,
     fail('voorraadreservering heeft het oude aanbodfilter: ' . $stockFilter);
 }
 
-$GLOBALS['ELPIS_STOCK_RESERVATION_SOURCE_TYPES'] = [39];
+$GLOBALS['ELPIS_STOCK_RESERVATION_SOURCE_TYPES'] = [39, 32];
 $extended = elpis_item_stock_reservation_filter(['A']);
-if (!str_contains($extended, 'Source_Type eq 1003') || !str_contains($extended, 'Source_Type eq 39') || filter_ors_cross_fields($extended)) {
-    fail('extra werkorder-brontype moet op hetzelfde veld blijven: ' . $extended);
+if (!str_contains($extended, 'Source_Type eq 1003') || !str_contains($extended, 'Source_Type eq 901') || !str_contains($extended, 'Source_Type eq 37') || !str_contains($extended, 'Source_Type eq 39') || str_contains($extended, 'Source_Type eq 32') || filter_ors_cross_fields($extended)) {
+    fail('extra brontype blijft op Source_Type, 32 blijft weg: ' . $extended);
 }
 unset($GLOBALS['ELPIS_STOCK_RESERVATION_SOURCE_TYPES']);
 
@@ -173,8 +173,8 @@ if (elpis_line_expected_receipt_display($pi) !== 'Te laat') {
 if ((elpis_line_tooltips($pi)['expected_receipt'] ?? '') !== '(PurchaseLines -> Expected_Receipt_Date)') {
     fail('tooltip noemt de PurchaseLines-bron: ' . json_encode(elpis_line_tooltips($pi)));
 }
-if ((elpis_line_tooltips($pi)['workorder'] ?? '') !== '(AppWerkorders -> No)' || (elpis_line_tooltips($pi)['stock'] ?? '') !== '(AppItems -> InventoryField)') {
-    fail('tooltips noemen AppWerkorders en AppItems');
+if ((elpis_line_tooltips($pi)['workorder'] ?? '') !== '(AppWerkorders -> No)' || !str_contains((string) (elpis_line_tooltips($pi)['stock'] ?? ''), 'InventoryField') || !str_contains((string) (elpis_line_tooltips($pi)['stock'] ?? ''), 'Quantity_Base')) {
+    fail('tooltips noemen AppWerkorders, InventoryField en Quantity_Base');
 }
 if (abs((float) ($pi['free_stock'] ?? -1) - 12) > 0.00001) {
     fail('zonder reservering is vrije voorraad de InventoryField');
@@ -293,6 +293,31 @@ $stockLines = elpis_apply_receipt_expectations([
 if (abs((float) ($stockLines['PRJ2606522'][0]['free_stock'] ?? 0) - 7) > 0.00001) {
     fail('alleen reserveringen van andere projecten gaan van de voorraad af: ' . json_encode($stockLines['PRJ2606522'][0]));
 }
+$assembly = $other;
+$assembly['entry_no'] = 3;
+$assembly['source_type'] = 901;
+$assembly['source_id'] = 'ASS2601';
+$assembly['quantity_base'] = 2;
+$sales = $other;
+$sales['entry_no'] = 4;
+$sales['source_type'] = 37;
+$sales['source_id'] = 'SO1';
+$sales['quantity_base'] = -1;
+$ledgerReservation = $other;
+$ledgerReservation['entry_no'] = 5;
+$ledgerReservation['source_type'] = 32;
+$ledgerReservation['source_id'] = 'PRJ-ANDER';
+$ledgerReservation['quantity_base'] = -9;
+$assemblyOnOwnProject = $assembly;
+$assemblyOnOwnProject['entry_no'] = 6;
+$assemblyOnOwnProject['source_id'] = 'PRJ2606522';
+$assemblyOnOwnProject['quantity_base'] = -1;
+$withConfirmed = elpis_apply_receipt_expectations([
+    'PRJ2606522' => [planningLine(['purchase_order_no' => '', 'purchase_order_line_no' => 0, 'expected_receipt_date' => '2026-11-01'])],
+], [$own, $other, $assembly, $sales, $ledgerReservation, $assemblyOnOwnProject], [], ['PI20002946' => 10]);
+if (abs((float) ($withConfirmed['PRJ2606522'][0]['free_stock'] ?? 0) - 3) > 0.00001) {
+    fail('901 en 37 gaan eraf, 32 en eigen 1003 niet: ' . json_encode($withConfirmed['PRJ2606522'][0]));
+}
 $ignored = $other;
 $ignored['status'] = 'Tracking';
 $ignored['quantity_base'] = -9;
@@ -391,7 +416,7 @@ $GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $ent
 };
 elpis_reset_fetch_memo();
 elpis_fetch_item_stock_reservations('Koninklijke van Twist', $stockItems, ELPI_CACHE_TTL);
-if (count($stockCalls) !== 2 || !str_contains($stockCalls[0], 'Source_Type eq 1003') || !str_contains($stockCalls[1], 'Source_Type eq 1003')) {
+if (count($stockCalls) !== 2 || !str_contains($stockCalls[0], 'Source_Type eq 1003') || !str_contains($stockCalls[0], "Item_No eq 'ITEM1'") || !str_contains($stockCalls[1], 'Item_No eq ') || str_contains($stockCalls[0] . $stockCalls[1], 'Source_Type eq 32')) {
     fail('voorraadreserveringen chunked per 12 artikelen: ' . json_encode($stockCalls));
 }
 unset($GLOBALS['ELPIS_FETCH_OBSERVER']);

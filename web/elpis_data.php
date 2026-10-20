@@ -29,7 +29,9 @@ const ELPI_PLANNING_LINES_CHUNK_SIZE = 12;
 
 /** BC-brontypes op Reservation Entry (Database::). */
 const ELPI_ITEM_LEDGER_SOURCE_TYPE = 32;
+const ELPI_SALES_LINE_SOURCE_TYPE = 37;
 const ELPI_PURCHASE_LINE_SOURCE_TYPE = 39;
+const ELPI_ASSEMBLY_SOURCE_TYPE = 901;
 const ELPI_JOB_PLANNING_SOURCE_TYPE = 1003;
 /** Job planning line: Source_Subtype komt als tekst '2' uit OData. */
 const ELPI_JOB_PLANNING_SUBTYPE = '2';
@@ -1319,16 +1321,22 @@ function elpis_reservation_supply_filter(array $entryNos): string
 }
 
 /**
- * Source_Types die vrije voorraad verlagen.
- * Bevestigd: 1003 (projectplanningsregel). Werkorder-reserveringen zijn nog
- * niet bevestigd; extra ints in $GLOBALS['ELPIS_STOCK_RESERVATION_SOURCE_TYPES']
- * krijgen hetzelfde filter (Reservation, Positive eq false, ander project).
+ * Source_Types die vrije voorraad verlagen (Ariadne).
+ * 1003 projectplanningsregel, ook werkorders; Source_ID is het projectnummer.
+ * 901 assemblage (ASS…). 37 verkooporderregel.
+ * 32 (artikelpost) telt niet mee. Eigen project alleen bij 1003 uitsluiten.
+ * Een ongefilterde ReservationEntries-query duurt ~40s; altijd op Item_No
+ * begrenzen. Nightly schrijft die gefilterde antwoorden in de OData-cache.
  *
  * @return list<int>
  */
 function elpis_stock_reservation_source_types(): array
 {
-    $types = [ELPI_JOB_PLANNING_SOURCE_TYPE];
+    $types = [
+        ELPI_SALES_LINE_SOURCE_TYPE,
+        ELPI_ASSEMBLY_SOURCE_TYPE,
+        ELPI_JOB_PLANNING_SOURCE_TYPE,
+    ];
     $extra = $GLOBALS['ELPIS_STOCK_RESERVATION_SOURCE_TYPES'] ?? [];
     if (is_array($extra)) {
         foreach ($extra as $type) {
@@ -1339,7 +1347,9 @@ function elpis_stock_reservation_source_types(): array
         }
     }
 
-    $types = array_values(array_unique($types));
+    $types = array_values(array_unique(array_filter($types, static function (int $type): bool {
+        return $type !== ELPI_ITEM_LEDGER_SOURCE_TYPE;
+    })));
     sort($types, SORT_NUMERIC);
 
     return $types;
@@ -2211,8 +2221,9 @@ function elpis_apply_receipt_expectations(array $linesByProject, array $reservat
             continue;
         }
         $reservedTotal[$itemKey] = ($reservedTotal[$itemKey] ?? 0.0) + $qty;
+        $sourceType = (int) ($entry['source_type'] ?? 0);
         $source = strtoupper(trim((string) ($entry['source_id'] ?? '')));
-        if ($source !== '') {
+        if ($sourceType === ELPI_JOB_PLANNING_SOURCE_TYPE && $source !== '') {
             $ownKey = $itemKey . '|' . $source;
             $reservedOwn[$ownKey] = ($reservedOwn[$ownKey] ?? 0.0) + $qty;
         }
@@ -2714,7 +2725,7 @@ function elpis_line_tooltips(array $line): array
         'open' => '(AppProjectInkoopPlanningsRegel -> LVS_Outstanding_Qty_Base)',
         'received' => '(AppProjectInkoopPlanningsRegel -> LVS_Outstanding_Qty_Base)',
         'expected_receipt' => '(' . $receiptSource . ')',
-        'stock' => '(AppItems -> InventoryField)',
+        'stock' => '(AppItems -> InventoryField) − (ReservationEntries -> Quantity_Base)',
     ];
 }
 
