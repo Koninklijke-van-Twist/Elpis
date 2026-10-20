@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 2;
+const ELPI_PROJECT_CACHE_VERSION = 3;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -623,6 +623,23 @@ function elpis_line_purchase_outstanding_closed(array $line): bool
     return (float) $value <= 0.00001;
 }
 
+function elpis_line_inkoop_outstanding_closed(array $line): bool
+{
+    if (trim((string) ($line['purchase_order_no'] ?? '')) === '') {
+        return false;
+    }
+    if (!array_key_exists('inkoop_outstanding_qty', $line)) {
+        return false;
+    }
+
+    $value = $line['inkoop_outstanding_qty'];
+    if ($value === null || $value === '') {
+        return false;
+    }
+
+    return (float) $value <= 0.00001;
+}
+
 function elpis_line_ledger_received_qty(array $line): ?float
 {
     if (!array_key_exists('ledger_received_qty', $line)) {
@@ -643,7 +660,7 @@ function elpis_line_is_received(array $line): bool
         return true;
     }
 
-    if (elpis_line_purchase_outstanding_closed($line)) {
+    if (elpis_line_purchase_outstanding_closed($line) || elpis_line_inkoop_outstanding_closed($line)) {
         return true;
     }
 
@@ -1188,46 +1205,114 @@ function elpis_enrich_lines_with_inkoop_planning(string $company, array $linesBy
         return $linesByProject;
     }
 
-    $byKey = [];
+    $rows = [];
     foreach (elpis_job_scoped_filters($projectNos) as $filter) {
-        $rows = elpis_try_fetch_rows($company, ELPI_INKOOP_PLANNING_ENTITY, [
+        foreach (elpis_try_fetch_rows($company, ELPI_INKOOP_PLANNING_ENTITY, [
             '$filter' => $filter,
             '$select' => elpis_inkoop_planning_select_fields(),
             '$orderby' => 'Job_No asc,Job_Task_No asc,Line_No asc',
-        ], $ttl);
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
+        ], $ttl) as $row) {
+            if (is_array($row)) {
+                $rows[] = $row;
             }
-            $key = elpis_planning_line_match_key(
-                (string) ($row['Job_No'] ?? ''),
-                (string) ($row['Job_Task_No'] ?? ''),
-                (int) ($row['Line_No'] ?? 0)
-            );
-            if ($key === '||0') {
-                continue;
-            }
-            $byKey[$key] = $row;
         }
+    }
+
+    return elpis_attach_inkoop_planning_rows($linesByProject, $rows);
+}
+
+function elpis_inkoop_supply_key(string $jobNo, string $itemNo, string $workOrderNo): string
+{
+    return strtoupper(trim($jobNo)) . '|' . strtoupper(trim($itemNo)) . '|' . strtoupper(trim($workOrderNo));
+}
+
+/**
+ * Job|taak|regelnr koppelt een werkorderregel aan de inkoopregel.
+ * Een regel zonder werkorder heeft vaak een ander regelnr; die hangt aan
+ * hetzelfde project, artikel en lege werkorder, en dáár staat document+regel.
+ *
+ * @param array<string, list<array<string, mixed>>> $linesByProject
+ * @param list<array<string, mixed>> $inkoopRows
+ * @return array<string, list<array<string, mixed>>>
+ */
+function elpis_attach_inkoop_planning_rows(array $linesByProject, array $inkoopRows): array
+{
+    $byPlanningKey = [];
+    $bySupply = [];
+    foreach ($inkoopRows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $jobNo = (string) ($row['Job_No'] ?? '');
+        $planningKey = elpis_planning_line_match_key(
+            $jobNo,
+            (string) ($row['Job_Task_No'] ?? ''),
+            (int) ($row['Line_No'] ?? 0)
+        );
+        if ($planningKey !== '||0') {
+            $byPlanningKey[$planningKey] = $row;
+        }
+        $itemNo = trim((string) ($row['No'] ?? ''));
+        if (trim($jobNo) === '' || $itemNo === '') {
+            continue;
+        }
+        $supplyKey = elpis_inkoop_supply_key($jobNo, $itemNo, (string) ($row['LVS_Work_Order_No'] ?? ''));
+        $bySupply[$supplyKey][] = $row;
     }
 
     foreach ($linesByProject as $projectNo => $lines) {
         if (!is_array($lines)) {
             continue;
         }
+        $consumedSupply = [];
         foreach ($lines as $index => $line) {
             if (!is_array($line)) {
                 continue;
             }
-            $key = elpis_planning_line_match_key(
+            $planningKey = elpis_planning_line_match_key(
                 (string) $projectNo,
                 (string) ($line['job_task_no'] ?? ''),
                 (int) ($line['line_no'] ?? 0)
             );
-            if (!isset($byKey[$key])) {
+            if (!isset($byPlanningKey[$planningKey])) {
                 continue;
             }
-            $linesByProject[$projectNo][$index] = elpis_merge_inkoop_planning_line($line, $byKey[$key]);
+            $row = $byPlanningKey[$planningKey];
+            $linesByProject[$projectNo][$index] = elpis_merge_inkoop_planning_line($line, $row);
+            $itemNo = trim((string) ($row['No'] ?? $line['item_no'] ?? ''));
+            if ($itemNo !== '') {
+                $consumedSupply[elpis_inkoop_supply_key((string) ($row['Job_No'] ?? $projectNo), $itemNo, (string) ($row['LVS_Work_Order_No'] ?? ''))] = true;
+            }
+        }
+
+        $pending = [];
+        foreach ($linesByProject[$projectNo] as $index => $line) {
+            if (!is_array($line)) {
+                continue;
+            }
+            if (trim((string) ($line['purchase_order_no'] ?? '')) !== '' && (int) ($line['purchase_order_line_no'] ?? 0) > 0) {
+                continue;
+            }
+            $itemNo = trim((string) ($line['item_no'] ?? ''));
+            if ($itemNo === '') {
+                continue;
+            }
+            $supplyKey = elpis_inkoop_supply_key((string) $projectNo, $itemNo, (string) ($line['work_order_no'] ?? ''));
+            if (isset($consumedSupply[$supplyKey])) {
+                continue;
+            }
+            $pending[$supplyKey][] = $index;
+        }
+
+        foreach ($pending as $supplyKey => $indexes) {
+            $candidates = $bySupply[$supplyKey] ?? [];
+            if (count($indexes) !== 1 || count($candidates) !== 1 || !is_array($candidates[0])) {
+                continue;
+            }
+            $linesByProject[$projectNo][$indexes[0]] = elpis_merge_inkoop_planning_line(
+                $linesByProject[$projectNo][$indexes[0]],
+                $candidates[0]
+            );
         }
     }
 
@@ -1285,6 +1370,9 @@ function elpis_merge_inkoop_planning_line(array $line, array $inkoopRow): array
     }
 
     $line['completely_received'] = !empty($line['completely_received']) || elpis_bc_bool($inkoopRow['LVS_Completely_Received'] ?? false);
+    if (array_key_exists('LVS_Outstanding_Qty_Base', $inkoopRow) && $inkoopRow['LVS_Outstanding_Qty_Base'] !== null && $inkoopRow['LVS_Outstanding_Qty_Base'] !== '') {
+        $line['inkoop_outstanding_qty'] = (float) $inkoopRow['LVS_Outstanding_Qty_Base'];
+    }
 
     $materialStatus = strtoupper(trim((string) ($line['material_status'] ?? '')));
     if ($materialStatus === '') {
@@ -2878,6 +2966,8 @@ function elpis_line_tooltips(array $line): array
             $receiptSource = 'PurchaseLines -> LVS_Completely_Received';
         } elseif (elpis_line_purchase_outstanding_closed($line)) {
             $receiptSource = 'PurchaseLines -> Outstanding_Quantity';
+        } elseif (elpis_line_inkoop_outstanding_closed($line)) {
+            $receiptSource = 'AppProjectInkoopPlanningsRegel -> LVS_Outstanding_Qty_Base';
         } else {
             $receiptSource = 'PurchaseLines -> LVS_Completely_Received';
         }

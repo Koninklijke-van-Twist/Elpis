@@ -462,6 +462,196 @@ if (($statusTLine['material_status'] ?? '') !== 'T' || elpis_line_filter_status(
     fail('materiaalstatus T blijft T; de ontvangstkolom is niet Te laat: ' . json_encode($statusTLine));
 }
 
+$withoutWoLines = [
+    '153390' => [
+        planningLine([
+            'job_task_no' => '100',
+            'line_no' => 40000,
+            'item_no' => 'PI20001429',
+            'description' => 'Spoedlevering',
+            'work_order_no' => '',
+            'purchase_order_no' => '',
+            'purchase_order_line_no' => 0,
+            'quantity' => 1,
+            'qty_ordered' => 0,
+            'qty_open' => 1,
+            'qty_received' => 0,
+            'expected_receipt_date' => '2026-09-01',
+            'material_status' => 'O',
+            'remaining_qty' => 1,
+        ]),
+        planningLine([
+            'job_task_no' => '100',
+            'line_no' => 50000,
+            'item_no' => 'PI20001429',
+            'description' => 'Spoedlevering',
+            'work_order_no' => '4066161',
+            'purchase_order_no' => 'PO12609999',
+            'purchase_order_line_no' => 10000,
+            'quantity' => 1,
+            'expected_receipt_date' => '2026-09-01',
+            'material_status' => 'G',
+            'remaining_qty' => 1,
+        ]),
+        planningLine([
+            'job_task_no' => '200',
+            'line_no' => 60000,
+            'item_no' => 'PI20000438',
+            'description' => 'M24 bouten/moeren/sluitring',
+            'work_order_no' => '',
+            'purchase_order_no' => '',
+            'purchase_order_line_no' => 0,
+            'quantity' => 1,
+            'expected_receipt_date' => '2026-09-01',
+            'material_status' => 'O',
+            'remaining_qty' => 1,
+        ]),
+        planningLine([
+            'job_task_no' => '300',
+            'line_no' => 70000,
+            'item_no' => 'PI20009901',
+            'description' => 'Nog open',
+            'work_order_no' => '',
+            'purchase_order_no' => '',
+            'purchase_order_line_no' => 0,
+            'quantity' => 1,
+            'expected_receipt_date' => '2026-09-01',
+            'material_status' => 'O',
+            'remaining_qty' => 1,
+        ]),
+        planningLine([
+            'job_task_no' => '400',
+            'line_no' => 80000,
+            'item_no' => 'PI20009902',
+            'description' => 'Status T',
+            'work_order_no' => '',
+            'purchase_order_no' => 'PO12600679',
+            'purchase_order_line_no' => 10000,
+            'quantity' => 1,
+            'expected_receipt_date' => '2026-09-01',
+            'material_status' => 'T',
+            'remaining_qty' => 1,
+        ]),
+    ],
+];
+$withoutWoInkoop = [
+    [
+        'Job_No' => '153390',
+        'Job_Task_No' => '900',
+        'Line_No' => 10000,
+        'No' => 'PI20001429',
+        'LVS_Work_Order_No' => '',
+        'LVS_Purchase_Order_No' => 'PO12602236',
+        'LVS_Purchase_Order_Line_No' => 20000,
+        'LVS_Quantity_Order_UoM' => 1,
+        'LVS_Outstanding_Qty_Base' => 0,
+        'LVS_Completely_Received' => false,
+    ],
+    [
+        'Job_No' => '153390',
+        'Job_Task_No' => '901',
+        'Line_No' => 10000,
+        'No' => 'PI20000438',
+        'LVS_Work_Order_No' => '',
+        'LVS_Purchase_Order_No' => 'PO12600678',
+        'LVS_Purchase_Order_Line_No' => 10000,
+        'LVS_Quantity_Order_UoM' => 1,
+        'LVS_Outstanding_Qty_Base' => 0,
+        'LVS_Completely_Received' => false,
+    ],
+    [
+        'Job_No' => '153390',
+        'Job_Task_No' => '902',
+        'Line_No' => 10000,
+        'No' => 'PI20009901',
+        'LVS_Work_Order_No' => '',
+        'LVS_Purchase_Order_No' => 'PO12609904',
+        'LVS_Purchase_Order_Line_No' => 10000,
+        'LVS_Quantity_Order_UoM' => 1,
+        'LVS_Outstanding_Qty_Base' => 1,
+        'LVS_Completely_Received' => false,
+    ],
+];
+$withoutWoPurchase = [
+    ['document_no' => 'PO12602236', 'line_no' => 10000, 'item_no' => 'PI-ANDER', 'outstanding_qty' => 4, 'completely_received' => false],
+    ['document_no' => 'PO12602236', 'line_no' => 20000, 'item_no' => 'PI20001429', 'outstanding_qty' => 0, 'completely_received' => false],
+    ['document_no' => 'PO12600678', 'line_no' => 10000, 'item_no' => 'PI20000438', 'outstanding_qty' => 0, 'completely_received' => false],
+    ['document_no' => 'PO12609904', 'line_no' => 10000, 'item_no' => 'PI20009901', 'outstanding_qty' => 1, 'completely_received' => false],
+    ['document_no' => 'PO12600679', 'line_no' => 10000, 'item_no' => 'PI20009902', 'outstanding_qty' => 0, 'completely_received' => false],
+    ['document_no' => 'PO12609999', 'line_no' => 10000, 'item_no' => 'PI20001429', 'outstanding_qty' => 1, 'completely_received' => false],
+];
+$withoutWo = elpis_apply_receipt_expectations(
+    elpis_attach_inkoop_planning_rows($withoutWoLines, $withoutWoInkoop),
+    [],
+    $withoutWoPurchase,
+    []
+);
+$spoed = $withoutWo['153390'][0];
+$picked = $withoutWo['153390'][1];
+$bolts = $withoutWo['153390'][2];
+$partialNoWo = $withoutWo['153390'][3];
+$statusTNoWo = $withoutWo['153390'][4];
+if (($spoed['work_order_no'] ?? '') !== '' || ($spoed['purchase_order_no'] ?? '') !== 'PO12602236' || (int) ($spoed['purchase_order_line_no'] ?? 0) !== 20000) {
+    fail('regel zonder werkorder koppelt op document en regelnummer: ' . json_encode($spoed));
+}
+if (($spoed['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($spoed) || elpis_line_expected_receipt_display($spoed) === 'Te laat' || elpis_line_row_tone($spoed) === 'alert' || ($spoed['material_status'] ?? '') !== 'O' || elpis_mail_line_matches_content($spoed, 'both')) {
+    fail('PI20001429 zonder werkorder is volledig ontvangen en niet te laat: ' . json_encode($spoed));
+}
+if ((elpis_line_tooltips($spoed)['expected_receipt'] ?? '') !== '(PurchaseLines -> Outstanding_Quantity)') {
+    fail('tooltip van een regel zonder werkorder noemt Outstanding_Quantity: ' . json_encode(elpis_line_tooltips($spoed)));
+}
+if (($bolts['work_order_no'] ?? '') !== '' || ($bolts['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($bolts) || ($bolts['purchase_order_no'] ?? '') !== 'PO12600678' || (int) ($bolts['purchase_order_line_no'] ?? 0) !== 10000 || elpis_mail_line_matches_content($bolts, 'late')) {
+    fail('PI20000438 zonder werkorder is volledig ontvangen: ' . json_encode($bolts));
+}
+if (($picked['work_order_no'] ?? '') !== '4066161' || ($picked['purchase_order_no'] ?? '') !== 'PO12609999' || ($picked['receipt_state'] ?? '') !== 'received' || ($picked['material_status'] ?? '') !== 'G') {
+    fail('dezelfde artikelregel op de werkorder blijft Gepicked: ' . json_encode($picked));
+}
+if (($partialNoWo['receipt_state'] ?? '') !== 'late' || elpis_line_expected_receipt_display($partialNoWo) !== 'Te laat' || ($partialNoWo['material_status'] ?? '') !== 'O' || !elpis_mail_line_matches_content($partialNoWo, 'both')) {
+    fail('deels ontvangen zonder werkorder blijft te laat: ' . json_encode($partialNoWo));
+}
+if (($statusTNoWo['work_order_no'] ?? '') !== '' || ($statusTNoWo['material_status'] ?? '') !== 'T' || elpis_line_filter_status($statusTNoWo) !== 'T' || elpis_line_row_tone($statusTNoWo) !== 'alert' || elpis_line_expected_receipt_display($statusTNoWo) === 'Te laat') {
+    fail('materiaalstatus T zonder werkorder blijft rood: ' . json_encode($statusTNoWo));
+}
+$ambiguousNoWo = elpis_apply_receipt_expectations(elpis_attach_inkoop_planning_rows([
+    '153390' => [
+        planningLine([
+            'line_no' => 10000,
+            'item_no' => 'PI20001429',
+            'work_order_no' => '',
+            'purchase_order_no' => '',
+            'purchase_order_line_no' => 0,
+            'expected_receipt_date' => '2026-09-01',
+            'material_status' => 'O',
+            'remaining_qty' => 1,
+        ]),
+        planningLine([
+            'line_no' => 20000,
+            'job_task_no' => '200-000-060',
+            'item_no' => 'PI20001429',
+            'work_order_no' => '',
+            'purchase_order_no' => '',
+            'purchase_order_line_no' => 0,
+            'expected_receipt_date' => '2026-09-01',
+            'material_status' => 'O',
+            'remaining_qty' => 1,
+        ]),
+    ],
+], [[
+    'Job_No' => '153390',
+    'Job_Task_No' => '900',
+    'Line_No' => 30000,
+    'No' => 'PI20001429',
+    'LVS_Work_Order_No' => '',
+    'LVS_Purchase_Order_No' => 'PO12602236',
+    'LVS_Purchase_Order_Line_No' => 20000,
+    'LVS_Outstanding_Qty_Base' => 0,
+]]), [], [], []);
+foreach ($ambiguousNoWo['153390'] as $ambiguousLine) {
+    if (($ambiguousLine['receipt_state'] ?? '') === 'received' || ($ambiguousLine['purchase_order_no'] ?? '') !== '') {
+        fail('twee regels zonder werkorder voor hetzelfde artikel koppelen niet aan één inkoopregel: ' . json_encode($ambiguousLine));
+    }
+}
+
 $ledgerFull = elpis_apply_receipt_expectations(['P' => [planningLine([
     'purchase_order_no' => '',
     'purchase_order_line_no' => 0,
