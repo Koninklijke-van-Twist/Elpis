@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 4;
+const ELPI_PROJECT_CACHE_VERSION = 5;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -623,6 +623,20 @@ function elpis_line_purchase_outstanding_closed(array $line): bool
     return (float) $value <= 0.00001;
 }
 
+function elpis_line_purchase_outstanding_open(array $line): bool
+{
+    if (!array_key_exists('purchase_outstanding_qty', $line)) {
+        return false;
+    }
+
+    $value = $line['purchase_outstanding_qty'];
+    if ($value === null || $value === '') {
+        return false;
+    }
+
+    return (float) $value > 0.00001;
+}
+
 function elpis_line_inkoop_outstanding_closed(array $line): bool
 {
     if (trim((string) ($line['purchase_order_no'] ?? '')) === '') {
@@ -664,25 +678,9 @@ function elpis_line_shown_received_qty(array $line): float
     return (float) ($line['qty_received'] ?? 0);
 }
 
-function elpis_line_shown_qty_fully_received(array $line): bool
-{
-    $ordered = elpis_line_shown_ordered_qty($line);
-    $received = elpis_line_shown_received_qty($line);
-
-    return $ordered > 0.00001 && $received + 0.00001 >= $ordered;
-}
-
 function elpis_line_is_received(array $line): bool
 {
     if (!empty($line['completely_received']) || !empty($line['completely_picked'])) {
-        return true;
-    }
-
-    if (elpis_line_purchase_outstanding_closed($line) || elpis_line_inkoop_outstanding_closed($line)) {
-        return true;
-    }
-
-    if (elpis_line_shown_qty_fully_received($line)) {
         return true;
     }
 
@@ -692,14 +690,24 @@ function elpis_line_is_received(array $line): bool
         return true;
     }
 
+    $status = strtoupper(trim((string) ($line['material_status'] ?? '')));
+    if (in_array($status, ['G', 'B', 'A', 'C'], true)) {
+        return true;
+    }
+
     $ledgerQty = elpis_line_ledger_received_qty($line);
     if ($quantity > 0.00001 && $ledgerQty !== null && $ledgerQty + 0.00001 >= $quantity) {
         return true;
     }
 
-    $status = strtoupper(trim((string) ($line['material_status'] ?? '')));
-    if (in_array($status, ['G', 'B', 'A', 'C'], true)) {
+    if (elpis_line_purchase_outstanding_closed($line)) {
         return true;
+    }
+
+    // Outstanding_Quantity > 0 op de inkoopregel: de regel is niet ontvangen,
+    // ook niet als Remaining_Qty of een afgeleide Ontvangen dat suggereert.
+    if (elpis_line_purchase_outstanding_open($line)) {
+        return false;
     }
 
     $remaining = elpis_line_remaining_qty($line);
@@ -726,7 +734,7 @@ function elpis_refresh_receipt_state(array $line): array
 
 function elpis_line_is_late(array $line, ?string $today = null): bool
 {
-    if (elpis_line_is_received($line) || elpis_line_shown_qty_fully_received($line) || elpis_line_is_not_required($line)) {
+    if (elpis_line_is_received($line) || elpis_line_is_not_required($line)) {
         return false;
     }
 
@@ -816,7 +824,7 @@ function elpis_receipt_sort_value(array $line): string
     return '9999-99-99';
 }
 
-function elpis_line_quantities(float $quantity, string $purchaseOrderNo, float $orderedQty, float $outstanding): array
+function elpis_line_quantities(float $quantity, string $purchaseOrderNo, float $orderedQty, ?float $outstanding = null): array
 {
     $hasPurchaseOrder = $purchaseOrderNo !== '';
     if ($orderedQty <= 0 && $hasPurchaseOrder) {
@@ -824,6 +832,17 @@ function elpis_line_quantities(float $quantity, string $purchaseOrderNo, float $
     }
 
     if ($hasPurchaseOrder) {
+        // null: outstanding is onbekend. LVS_Outstanding_Qty_Base van de
+        // werkorderregel is dat vaak 0 zonder dat er iets ontvangen is.
+        if ($outstanding === null) {
+            return [
+                'qty_to_order' => 0.0,
+                'qty_ordered' => $orderedQty,
+                'qty_open' => $orderedQty,
+                'qty_received' => 0.0,
+            ];
+        }
+
         $qtyReceived = max(0.0, $orderedQty - $outstanding);
 
         return [
@@ -835,11 +854,48 @@ function elpis_line_quantities(float $quantity, string $purchaseOrderNo, float $
     }
 
     return [
-        'qty_to_order' => max($outstanding, $quantity),
+        'qty_to_order' => max($outstanding ?? 0.0, $quantity),
         'qty_ordered' => 0.0,
         'qty_open' => 0.0,
         'qty_received' => 0.0,
     ];
+}
+
+function elpis_apply_purchase_line_quantities(array $line): array
+{
+    if (trim((string) ($line['purchase_order_no'] ?? '')) === '') {
+        return $line;
+    }
+
+    $ordered = (float) ($line['qty_ordered'] ?? 0);
+    if ($ordered <= 0.00001) {
+        $ordered = (float) ($line['quantity'] ?? 0);
+    }
+    if ($ordered <= 0.00001) {
+        return $line;
+    }
+
+    if (!empty($line['completely_received'])) {
+        $line['qty_to_order'] = 0.0;
+        $line['qty_ordered'] = $ordered;
+        $line['qty_open'] = 0.0;
+        $line['qty_received'] = $ordered;
+
+        return $line;
+    }
+
+    if (!array_key_exists('purchase_outstanding_qty', $line) || $line['purchase_outstanding_qty'] === null || $line['purchase_outstanding_qty'] === '') {
+        return $line;
+    }
+
+    $outstanding = (float) $line['purchase_outstanding_qty'];
+    $received = max(0.0, $ordered - $outstanding);
+    $line['qty_to_order'] = 0.0;
+    $line['qty_ordered'] = $ordered;
+    $line['qty_received'] = $received;
+    $line['qty_open'] = max(0.0, $ordered - $received);
+
+    return $line;
 }
 
 function elpis_normalize_planning_line_row(array $row): array
@@ -852,7 +908,7 @@ function elpis_normalize_planning_line_row(array $row): array
         $quantity,
         $purchaseOrderNo,
         (float) ($row['LVS_Quantity_Order_UoM'] ?? 0),
-        (float) ($row['LVS_Outstanding_Qty_Base'] ?? 0)
+        null
     );
     $materialStatus = strtoupper(trim((string) ($row['KVT_Status_Material'] ?? '')));
     $planning = elpis_planning_date_from_row($row);
@@ -1352,7 +1408,7 @@ function elpis_merge_inkoop_planning_line(array $line, array $inkoopRow): array
         $quantity,
         $purchaseOrderNo,
         (float) ($inkoopRow['LVS_Quantity_Order_UoM'] ?? 0),
-        (float) ($inkoopRow['LVS_Outstanding_Qty_Base'] ?? 0)
+        null
     );
     if ($purchaseOrderNo !== '') {
         $line = array_merge($line, $quantities);
@@ -2519,6 +2575,14 @@ function elpis_apply_ledger_receipt_quantities(string $projectNo, array $lines, 
                 continue;
             }
             $lines[$index]['ledger_received_qty'] = $quantity;
+            $lines[$index]['qty_received'] = $quantity;
+            $ordered = (float) ($lines[$index]['qty_ordered'] ?? 0);
+            if ($ordered <= 0.00001) {
+                $lines[$index]['qty_ordered'] = $quantity;
+                $ordered = $quantity;
+            }
+            $lines[$index]['qty_open'] = max(0.0, $ordered - $quantity);
+            $lines[$index]['qty_to_order'] = 0.0;
             $lines[$index] = elpis_refresh_receipt_state($lines[$index]);
         }
     }
@@ -2553,6 +2617,7 @@ function elpis_finalize_line(
         if (array_key_exists('outstanding_qty', $purchase) && $purchase['outstanding_qty'] !== null && $purchase['outstanding_qty'] !== '') {
             $line['purchase_outstanding_qty'] = (float) $purchase['outstanding_qty'];
         }
+        $line = elpis_apply_purchase_line_quantities($line);
     }
 
     $kvtDate = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
@@ -2988,10 +3053,8 @@ function elpis_line_tooltips(array $line): array
             $receiptSource = 'PurchaseLines -> LVS_Completely_Received';
         } elseif (elpis_line_purchase_outstanding_closed($line)) {
             $receiptSource = 'PurchaseLines -> Outstanding_Quantity';
-        } elseif (elpis_line_inkoop_outstanding_closed($line)) {
-            $receiptSource = 'AppProjectInkoopPlanningsRegel -> LVS_Outstanding_Qty_Base';
-        } elseif (elpis_line_shown_qty_fully_received($line)) {
-            $receiptSource = 'AppProjectInkoopPlanningsRegel -> LVS_Quantity_Order_UoM';
+        } elseif (elpis_line_ledger_received_qty($line) !== null) {
+            $receiptSource = 'ItemLedgerEntries -> Quantity';
         } else {
             $receiptSource = 'PurchaseLines -> LVS_Completely_Received';
         }
@@ -3013,8 +3076,8 @@ function elpis_line_tooltips(array $line): array
         'material_status' => '(WerkordersLines -> KVT_Status_Material)',
         'to_order' => '(WerkordersLines -> Quantity)',
         'ordered' => '(AppProjectInkoopPlanningsRegel -> LVS_Quantity_Order_UoM)',
-        'open' => '(AppProjectInkoopPlanningsRegel -> LVS_Outstanding_Qty_Base)',
-        'received' => '(AppProjectInkoopPlanningsRegel -> LVS_Outstanding_Qty_Base)',
+        'open' => '(PurchaseLines -> Outstanding_Quantity)',
+        'received' => '(PurchaseLines -> Outstanding_Quantity)',
         'expected_receipt' => '(' . $receiptSource . ')',
         'stock' => '(AppItems -> InventoryField) − (ReservationEntries -> Quantity_Base)',
     ];
