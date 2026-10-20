@@ -113,6 +113,12 @@ $ledger = elpis_item_ledger_filter(['PRJ2606522']);
 if (!str_contains($ledger, "Entry_Type eq 'Purchase'") || !str_contains($ledger, "Document_Type eq 'Purchase Receipt'") || !str_contains($ledger, "Job_No eq 'PRJ2606522'") || filter_ors_cross_fields($ledger)) {
     fail('ontvangstboekingen zijn niet op het project beperkt: ' . $ledger);
 }
+if (!str_contains(elpis_item_ledger_select_fields(), 'Quantity')) {
+    fail('ontvangstposten moeten Quantity ophalen');
+}
+if (!str_contains(elpis_purchase_line_select_fields(), 'Outstanding_Quantity') || !str_contains(elpis_purchase_line_select_fields(), 'LVS_Completely_Received')) {
+    fail('inkoopselect moet Outstanding_Quantity en LVS_Completely_Received lezen');
+}
 
 $jobFilters = elpis_job_scoped_filters(array_map(static fn (int $i): string => 'P' . $i, range(1, 13)));
 if (count($jobFilters) !== 2 || !str_contains($jobFilters[0], "Type eq 'Artikel'") || filter_ors_cross_fields($jobFilters[0])) {
@@ -263,6 +269,310 @@ $closed = elpis_apply_receipt_expectations(['P' => [planningLine([
 $closedLine = $closed['P'][0];
 if (($closedLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($closedLine) || elpis_mail_line_matches_content($closedLine, 'both')) {
     fail('Remaining_Qty 0 is afgesloten en hoort niet in de mail: ' . json_encode($closedLine));
+}
+
+$kvtCompletely = elpis_apply_receipt_expectations(['P' => [planningLine([
+    'expected_receipt_date' => '2026-10-01',
+    'item_no' => 'PI20001186',
+    'purchase_order_no' => 'PO12601846',
+    'purchase_order_line_no' => 10000,
+    'work_order_no' => '4066161',
+])]], [], [[
+    'document_no' => 'PO12601846',
+    'line_no' => 10000,
+    'item_no' => 'PI20001186',
+    'expected_receipt_date' => '2026-09-01',
+    'completely_received' => true,
+]], []);
+$kvtCompletelyLine = $kvtCompletely['P'][0];
+if (($kvtCompletelyLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($kvtCompletelyLine) || elpis_line_expected_receipt_display($kvtCompletelyLine) === 'Te laat' || elpis_mail_line_matches_content($kvtCompletelyLine, 'both')) {
+    fail('LVS_Completely_Received telt ook met een KVT-datum: ' . json_encode($kvtCompletelyLine));
+}
+if ((elpis_line_tooltips($kvtCompletelyLine)['expected_receipt'] ?? '') !== '(PurchaseLines -> LVS_Completely_Received)') {
+    fail('tooltip noemt LVS_Completely_Received: ' . json_encode(elpis_line_tooltips($kvtCompletelyLine)));
+}
+if (($kvtCompletelyLine['expected_receipt_date'] ?? '') !== '2026-10-01') {
+    fail('de KVT-datum blijft de verwachte datum');
+}
+
+$fullyReceived = [
+    ['item_no' => 'PI20001186', 'purchase_order_no' => 'PO12601846', 'purchase_order_line_no' => 10000, 'work_order_no' => '4066161', 'quantity' => 2],
+    ['item_no' => 'PI20001189', 'purchase_order_no' => 'PO12601846', 'purchase_order_line_no' => 20000, 'work_order_no' => '4066161', 'quantity' => 1],
+    ['item_no' => 'PI20001190', 'purchase_order_no' => 'PO12601846', 'purchase_order_line_no' => 30000, 'work_order_no' => '4066161', 'quantity' => 4],
+    ['item_no' => 'PI20001191', 'purchase_order_no' => 'PO12601846', 'purchase_order_line_no' => 40000, 'work_order_no' => '4066161', 'quantity' => 1],
+    ['item_no' => 'PI20000169', 'purchase_order_no' => 'PO12600251', 'purchase_order_line_no' => 10000, 'work_order_no' => '153390', 'quantity' => 3],
+    ['item_no' => 'PI20000111', 'purchase_order_no' => 'PO12600562', 'purchase_order_line_no' => 10000, 'work_order_no' => '153390', 'quantity' => 1],
+    ['item_no' => 'PI20000124', 'purchase_order_no' => 'PO12600306', 'purchase_order_line_no' => 10000, 'work_order_no' => '160224', 'quantity' => 6],
+    ['item_no' => 'PI20000135', 'purchase_order_no' => 'PO12600565', 'purchase_order_line_no' => 10000, 'work_order_no' => '160224', 'quantity' => 2],
+    ['item_no' => 'PI20002516', 'purchase_order_no' => 'PO12604455', 'purchase_order_line_no' => 10000, 'work_order_no' => '160224', 'quantity' => 1],
+];
+$stillOpen = [
+    ['item_no' => 'PI24003010', 'purchase_order_no' => 'PO12609901', 'purchase_order_line_no' => 10000, 'work_order_no' => '153390', 'quantity' => 2, 'outstanding_qty' => 2],
+    ['item_no' => 'PI28127010', 'purchase_order_no' => 'PO12609902', 'purchase_order_line_no' => 10000, 'work_order_no' => '160224', 'quantity' => 1, 'outstanding_qty' => 1],
+    ['item_no' => 'PI27751010', 'purchase_order_no' => 'PO12609903', 'purchase_order_line_no' => 10000, 'work_order_no' => '160224', 'quantity' => 5, 'outstanding_qty' => 0.5],
+];
+$sampleLines = [];
+$samplePurchase = [];
+foreach ($fullyReceived as $spec) {
+    $sampleLines[] = planningLine([
+        'item_no' => $spec['item_no'],
+        'purchase_order_no' => $spec['purchase_order_no'],
+        'purchase_order_line_no' => $spec['purchase_order_line_no'],
+        'work_order_no' => $spec['work_order_no'],
+        'quantity' => $spec['quantity'],
+        'qty_ordered' => $spec['quantity'],
+        'qty_open' => $spec['quantity'],
+        'qty_received' => 0,
+        'expected_receipt_date' => '2026-10-01',
+        'material_status' => 'I',
+    ]);
+    $samplePurchase[] = [
+        'document_no' => $spec['purchase_order_no'],
+        'line_no' => $spec['purchase_order_line_no'],
+        'item_no' => $spec['item_no'],
+        'completely_received' => false,
+        'outstanding_qty' => 0,
+    ];
+}
+foreach ($stillOpen as $spec) {
+    $sampleLines[] = planningLine([
+        'item_no' => $spec['item_no'],
+        'purchase_order_no' => $spec['purchase_order_no'],
+        'purchase_order_line_no' => $spec['purchase_order_line_no'],
+        'work_order_no' => $spec['work_order_no'],
+        'quantity' => $spec['quantity'],
+        'qty_ordered' => $spec['quantity'],
+        'qty_open' => $spec['outstanding_qty'],
+        'qty_received' => $spec['quantity'] - $spec['outstanding_qty'],
+        'expected_receipt_date' => '2026-10-01',
+        'material_status' => 'I',
+    ]);
+    $samplePurchase[] = [
+        'document_no' => $spec['purchase_order_no'],
+        'line_no' => $spec['purchase_order_line_no'],
+        'item_no' => $spec['item_no'],
+        'completely_received' => false,
+        'outstanding_qty' => $spec['outstanding_qty'],
+    ];
+}
+$sample = elpis_apply_receipt_expectations(['WO153390' => $sampleLines], [], $samplePurchase, []);
+foreach ($sample['WO153390'] as $sampleLine) {
+    $itemNo = (string) ($sampleLine['item_no'] ?? '');
+    $open = in_array($itemNo, ['PI24003010', 'PI28127010', 'PI27751010'], true);
+    if ($open) {
+        if (($sampleLine['receipt_state'] ?? '') !== 'late' || elpis_line_expected_receipt_display($sampleLine) !== 'Te laat' || !elpis_mail_line_matches_content($sampleLine, 'both')) {
+            fail($itemNo . ' hoort te laat te blijven: ' . json_encode($sampleLine));
+        }
+        continue;
+    }
+    if (($sampleLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($sampleLine) || elpis_line_expected_receipt_display($sampleLine) === 'Te laat' || elpis_mail_line_matches_content($sampleLine, 'late') || elpis_mail_line_matches_content($sampleLine, 'both')) {
+        fail($itemNo . ' is volledig ontvangen (Outstanding_Quantity 0) en hoort niet te laat of in de mail: ' . json_encode($sampleLine));
+    }
+    if ((elpis_line_tooltips($sampleLine)['expected_receipt'] ?? '') !== '(PurchaseLines -> Outstanding_Quantity)') {
+        fail($itemNo . ' tooltip moet Outstanding_Quantity noemen: ' . json_encode(elpis_line_tooltips($sampleLine)));
+    }
+    if (($sampleLine['material_status'] ?? '') !== 'I') {
+        fail('materiaalstatus blijft onaangeroerd');
+    }
+}
+
+$linkedByItem = elpis_apply_receipt_expectations(['P' => [planningLine([
+    'item_no' => 'PI20000169',
+    'purchase_order_no' => 'PO12600251',
+    'purchase_order_line_no' => 0,
+    'work_order_no' => '153390',
+    'expected_receipt_date' => '2026-09-15',
+])]], [], [[
+    'document_no' => 'PO12600251',
+    'line_no' => 10000,
+    'item_no' => 'PI20000169',
+    'completely_received' => false,
+    'outstanding_qty' => 0,
+]], []);
+if (($linkedByItem['P'][0]['receipt_state'] ?? '') !== 'received') {
+    fail('zonder regelnummer koppelt een uniek artikel op de inkooporder: ' . json_encode($linkedByItem['P'][0]));
+}
+
+$misnumbered = elpis_apply_receipt_expectations(['P' => [planningLine([
+    'item_no' => 'PI20002516',
+    'purchase_order_no' => 'PO12604455',
+    'purchase_order_line_no' => 10000,
+    'work_order_no' => '160224',
+    'expected_receipt_date' => '2026-09-15',
+])]], [], [
+    [
+        'document_no' => 'PO12604455',
+        'line_no' => 10000,
+        'item_no' => 'PI-ANDER',
+        'completely_received' => false,
+        'outstanding_qty' => 8,
+    ],
+    [
+        'document_no' => 'PO12604455',
+        'line_no' => 20000,
+        'item_no' => 'PI20002516',
+        'completely_received' => false,
+        'outstanding_qty' => 0,
+    ],
+], []);
+if (($misnumbered['P'][0]['receipt_state'] ?? '') !== 'received') {
+    fail('een regelnummer van een ander artikel valt terug op het unieke artikel: ' . json_encode($misnumbered['P'][0]));
+}
+
+$ambiguous = elpis_apply_receipt_expectations(['P' => [planningLine([
+    'item_no' => 'PI20000111',
+    'purchase_order_no' => 'PO12600562',
+    'purchase_order_line_no' => 0,
+    'expected_receipt_date' => '2026-10-01',
+])]], [], [
+    [
+        'document_no' => 'PO12600562',
+        'line_no' => 10000,
+        'item_no' => 'PI20000111',
+        'completely_received' => false,
+        'outstanding_qty' => 0,
+    ],
+    [
+        'document_no' => 'PO12600562',
+        'line_no' => 20000,
+        'item_no' => 'PI20000111',
+        'completely_received' => false,
+        'outstanding_qty' => 2,
+    ],
+], []);
+if (($ambiguous['P'][0]['receipt_state'] ?? '') === 'received') {
+    fail('twee inkoopregels voor hetzelfde artikel zonder regelnummer sluiten de regel niet');
+}
+
+$statusT = elpis_apply_receipt_expectations(['P' => [planningLine([
+    'item_no' => 'PI20001190',
+    'purchase_order_no' => 'PO12601846',
+    'purchase_order_line_no' => 30000,
+    'expected_receipt_date' => '2026-10-01',
+    'material_status' => 'T',
+])]], [], [[
+    'document_no' => 'PO12601846',
+    'line_no' => 30000,
+    'item_no' => 'PI20001190',
+    'completely_received' => false,
+    'outstanding_qty' => 0,
+]], []);
+$statusTLine = $statusT['P'][0];
+if (($statusTLine['material_status'] ?? '') !== 'T' || elpis_line_filter_status($statusTLine) !== 'T' || elpis_line_row_tone($statusTLine) !== 'alert' || elpis_line_expected_receipt_display($statusTLine) === 'Te laat') {
+    fail('materiaalstatus T blijft T; de ontvangstkolom is niet Te laat: ' . json_encode($statusTLine));
+}
+
+$ledgerFull = elpis_apply_receipt_expectations(['P' => [planningLine([
+    'purchase_order_no' => '',
+    'purchase_order_line_no' => 0,
+    'quantity' => 4,
+    'expected_receipt_date' => '2026-10-01',
+    'item_no' => 'PI20001186',
+])]], [], [], [], [
+    'receipts' => [
+        [
+            'Job_No' => 'P',
+            'Job_Task_No' => '200-000-050',
+            'Item_No' => 'PI20001186',
+            'Posting_Date' => '2026-10-09',
+            'Quantity' => 1,
+        ],
+        [
+            'Job_No' => 'P',
+            'Job_Task_No' => '200-000-050',
+            'Item_No' => 'PI20001186',
+            'Posting_Date' => '2026-10-11',
+            'Quantity' => 3,
+        ],
+    ],
+]);
+$ledgerFullLine = $ledgerFull['P'][0];
+if (($ledgerFullLine['receipt_state'] ?? '') !== 'received' || elpis_line_expected_receipt_display($ledgerFullLine) !== 'Reeds ontvangen (11-10-2026)' || elpis_line_is_late($ledgerFullLine) || elpis_mail_line_matches_content($ledgerFullLine, 'both')) {
+    fail('ontvangstposten die de hoeveelheid dekken zijn ontvangen: ' . json_encode($ledgerFullLine));
+}
+
+$ledgerPartial = elpis_apply_receipt_expectations(['P' => [planningLine([
+    'purchase_order_no' => '',
+    'purchase_order_line_no' => 0,
+    'quantity' => 4,
+    'expected_receipt_date' => '2026-10-01',
+    'item_no' => 'PI20001189',
+    'material_status' => 'I',
+])]], [], [], [], [
+    'receipts' => [[
+        'Job_No' => 'P',
+        'Job_Task_No' => '200-000-050',
+        'Item_No' => 'PI20001189',
+        'Posting_Date' => '2026-10-09',
+        'Quantity' => 3,
+    ]],
+]);
+$ledgerPartialLine = $ledgerPartial['P'][0];
+if (($ledgerPartialLine['receipt_state'] ?? '') === 'received' || elpis_line_expected_receipt_display($ledgerPartialLine) !== 'Te laat' || ($ledgerPartialLine['material_status'] ?? '') !== 'I') {
+    fail('een gedeeltelijke ontvangst blijft te laat: ' . json_encode($ledgerPartialLine));
+}
+
+$ledgerSiblings = elpis_apply_receipt_expectations(['P' => [
+    planningLine([
+        'purchase_order_no' => '',
+        'purchase_order_line_no' => 0,
+        'quantity' => 1,
+        'line_no' => 10000,
+        'expected_receipt_date' => '2026-10-01',
+        'item_no' => 'PI20001191',
+    ]),
+    planningLine([
+        'purchase_order_no' => '',
+        'purchase_order_line_no' => 0,
+        'quantity' => 1,
+        'line_no' => 20000,
+        'expected_receipt_date' => '2026-10-01',
+        'item_no' => 'PI20001191',
+    ]),
+]], [], [], [], [
+    'receipts' => [[
+        'Job_No' => 'P',
+        'Job_Task_No' => '200-000-050',
+        'Item_No' => 'PI20001191',
+        'Posting_Date' => '2026-10-09',
+        'Quantity' => 1,
+    ]],
+]);
+foreach ($ledgerSiblings['P'] as $ledgerSibling) {
+    if (($ledgerSibling['receipt_state'] ?? '') === 'received') {
+        fail('één ontvangsthoeveelheid sluit niet elke regel met hetzelfde artikel: ' . json_encode($ledgerSibling));
+    }
+}
+$ledgerBoth = elpis_apply_receipt_expectations(['P' => [
+    planningLine([
+        'purchase_order_no' => '',
+        'purchase_order_line_no' => 0,
+        'quantity' => 1,
+        'line_no' => 10000,
+        'expected_receipt_date' => '2026-10-01',
+        'item_no' => 'PI20001191',
+    ]),
+    planningLine([
+        'purchase_order_no' => '',
+        'purchase_order_line_no' => 0,
+        'quantity' => 2,
+        'line_no' => 20000,
+        'expected_receipt_date' => '2026-10-01',
+        'item_no' => 'PI20001191',
+    ]),
+]], [], [], [], [
+    'receipts' => [[
+        'Job_No' => 'P',
+        'Job_Task_No' => '200-000-050',
+        'Item_No' => 'PI20001191',
+        'Posting_Date' => '2026-10-12',
+        'Quantity' => 3,
+    ]],
+]);
+foreach ($ledgerBoth['P'] as $ledgerBothLine) {
+    if (($ledgerBothLine['receipt_state'] ?? '') !== 'received' || elpis_mail_line_matches_content($ledgerBothLine, 'both')) {
+        fail('de som van de ontvangst dekt beide regels: ' . json_encode($ledgerBothLine));
+    }
 }
 
 $unconfirmed = elpis_apply_receipt_expectations(['P' => [planningLine([
@@ -432,6 +742,20 @@ if (!is_array($cached) || ($cached['lines'][0]['item_no'] ?? '') !== 'PI20002946
 }
 if ((int) ($cached['expires_at'] ?? 0) - (int) ($cached['cached_at'] ?? 0) !== ELPI_CACHE_TTL) {
     fail('projectcache geldt minstens een dag');
+}
+if ((int) ($cached['version'] ?? 0) !== ELPI_PROJECT_CACHE_VERSION) {
+    fail('projectcache noteert de versie');
+}
+$stalePath = elpis_project_cache_path('Koninklijke van Twist', 'PRJ-OUD');
+file_put_contents($stalePath, json_encode([
+    'company' => 'Koninklijke van Twist',
+    'project_no' => 'PRJ-OUD',
+    'cached_at' => time(),
+    'expires_at' => time() + 3600,
+    'lines' => [$pi],
+]));
+if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
+    fail('projectcache zonder versie wordt genegeerd');
 }
 
 $index = (string) file_get_contents(dirname(__DIR__) . '/web/index.php');
