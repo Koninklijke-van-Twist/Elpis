@@ -121,21 +121,51 @@ if (!str_contains(elpis_item_ledger_select_fields(), 'Quantity')) {
     fail('ontvangstposten moeten Quantity ophalen');
 }
 $purchaseSelect = array_values(array_filter(array_map('trim', explode(',', elpis_purchase_line_select_fields()))));
-$purchaseSelectAllowed = ['Document_No', 'Line_No', 'Document_Type', 'Type', 'No', 'Job_No', 'Job_Task_No', 'Job_Line_Type', 'Quantity', 'Outstanding_Quantity', 'Expected_Receipt_Date', 'LVS_Completely_Received'];
+$purchaseSelectAllowed = ['Document_Type', 'Document_No', 'Line_No', 'Buy_from_Vendor_No', 'Type', 'No', 'Description', 'Location_Code', 'Quantity', 'Job_No', 'Job_Task_No', 'Job_Line_Type', 'Expected_Receipt_Date', 'LVS_Ex_Factory_Date', 'LVS_Date_on_Board', 'Outstanding_Quantity', 'Order_No'];
 foreach ($purchaseSelect as $purchaseField) {
     if (!in_array($purchaseField, $purchaseSelectAllowed, true)) {
         fail('PurchaseLines-select bevat een niet bewezen veld: ' . $purchaseField);
     }
 }
-foreach (['Document_No', 'Line_No', 'Type', 'No', 'Job_No', 'Job_Task_No', 'Job_Line_Type', 'Quantity', 'Outstanding_Quantity', 'Expected_Receipt_Date', 'LVS_Completely_Received'] as $purchaseField) {
+foreach (['Document_No', 'Line_No', 'Type', 'No', 'Job_No', 'Job_Task_No', 'Job_Line_Type', 'Quantity', 'Outstanding_Quantity', 'Expected_Receipt_Date'] as $purchaseField) {
     if (!in_array($purchaseField, $purchaseSelect, true)) {
         fail('PurchaseLines-select mist ' . $purchaseField);
     }
 }
-foreach (['Promised_Receipt_Date', 'Planned_Receipt_Date', 'Quantity_Received'] as $purchaseField) {
+foreach (['Promised_Receipt_Date', 'Planned_Receipt_Date', 'Quantity_Received', 'LVS_Completely_Received'] as $purchaseField) {
     if (in_array($purchaseField, $purchaseSelect, true) || str_contains(elpis_purchase_line_select_fields(), $purchaseField)) {
         fail('PurchaseLines-select mag ' . $purchaseField . ' niet opvragen');
     }
+}
+$inkoopSelect = array_values(array_filter(array_map('trim', explode(',', elpis_inkoop_planning_select_fields()))));
+foreach (['LVS_Completely_Received', 'LVS_Outstanding_Qty_Base', 'LVS_Purchase_Order_No', 'LVS_Purchase_Order_Line_No', 'KVT_Expected_Receipt_Date', 'Planned_Delivery_Date', 'Promised_Delivery_Date', 'Requested_Delivery_Date'] as $inkoopField) {
+    if (!in_array($inkoopField, $inkoopSelect, true)) {
+        fail('inkoopselect mist ' . $inkoopField);
+    }
+}
+foreach (['KVT_Qty_Picked', 'KVT_Completely_Picked', 'LVS_Quantity_Order_UoM'] as $inkoopField) {
+    if (in_array($inkoopField, $inkoopSelect, true)) {
+        fail('inkoopselect mag ' . $inkoopField . ' niet opvragen');
+    }
+}
+$reservationSelect = array_values(array_filter(array_map('trim', explode(',', elpis_reservation_select_fields()))));
+if (!in_array('Quantity_Base', $reservationSelect, true) || in_array('Quantity', $reservationSelect, true)) {
+    fail('reserveringen moeten Quantity_Base gebruiken: ' . elpis_reservation_select_fields());
+}
+$workOrderSelect = array_values(array_filter(array_map('trim', explode(',', elpis_work_order_select_fields()))));
+if (!in_array('Task_Description', $workOrderSelect, true) || in_array('Description', $workOrderSelect, true)) {
+    fail('werkorders moeten Task_Description gebruiken: ' . elpis_work_order_select_fields());
+}
+$ignoredPurchaseFlag = elpis_normalize_purchase_order_line([
+    'Document_No' => 'PO12609901',
+    'Line_No' => 10000,
+    'No' => 'PI24003010',
+    'Quantity' => 2,
+    'Outstanding_Quantity' => 2,
+    'LVS_Completely_Received' => true,
+]);
+if (array_key_exists('completely_received', $ignoredPurchaseFlag)) {
+    fail('PurchaseLines.LVS_Completely_Received mag de regel niet sluiten');
 }
 
 $jobFilters = elpis_job_scoped_filters(array_map(static fn (int $i): string => 'P' . $i, range(1, 13)));
@@ -237,11 +267,15 @@ if (($kvtWins['PRJ2606522'][0]['expected_receipt_date'] ?? '') !== '2026-12-01')
     fail('KVT_Expected_Receipt_Date gaat voor op de inkoopregel');
 }
 
-$received = elpis_apply_receipt_expectations(['PRJ2606522' => [planningLine()]], [], [[
+$received = elpis_apply_receipt_expectations(['PRJ2606522' => [planningLine([
+    'completely_received' => true,
+])]], [], [[
     'document_no' => 'PO12606033',
     'line_no' => 10000,
     'expected_receipt_date' => '2026-10-08',
-    'completely_received' => true,
+    'LVS_Completely_Received' => true,
+    'Outstanding_Quantity' => 2,
+    'Quantity' => 2,
 ]], [], [
     'receipts' => [[
         'Job_No' => 'PRJ2606522',
@@ -300,19 +334,22 @@ $kvtCompletely = elpis_apply_receipt_expectations(['P' => [planningLine([
     'purchase_order_no' => 'PO12601846',
     'purchase_order_line_no' => 10000,
     'work_order_no' => '4066161',
+    'completely_received' => true,
 ])]], [], [[
     'document_no' => 'PO12601846',
     'line_no' => 10000,
     'item_no' => 'PI20001186',
     'expected_receipt_date' => '2026-09-01',
-    'completely_received' => true,
+    'LVS_Completely_Received' => true,
+    'Outstanding_Quantity' => 2,
+    'Quantity' => 2,
 ]], []);
 $kvtCompletelyLine = $kvtCompletely['P'][0];
-if (($kvtCompletelyLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($kvtCompletelyLine) || elpis_line_expected_receipt_display($kvtCompletelyLine) === 'Te laat' || elpis_mail_line_matches_content($kvtCompletelyLine, 'both')) {
-    fail('LVS_Completely_Received telt ook met een KVT-datum: ' . json_encode($kvtCompletelyLine));
+if (($kvtCompletelyLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($kvtCompletelyLine) || elpis_line_expected_receipt_display($kvtCompletelyLine) === 'Te laat' || elpis_mail_line_matches_content($kvtCompletelyLine, 'both') || empty($kvtCompletelyLine['completely_received'])) {
+    fail('LVS_Completely_Received van de planningsregel telt ook met een KVT-datum: ' . json_encode($kvtCompletelyLine));
 }
-if ((elpis_line_tooltips($kvtCompletelyLine)['expected_receipt'] ?? '') !== '(PurchaseLines -> LVS_Completely_Received)') {
-    fail('tooltip noemt LVS_Completely_Received: ' . json_encode(elpis_line_tooltips($kvtCompletelyLine)));
+if ((elpis_line_tooltips($kvtCompletelyLine)['expected_receipt'] ?? '') !== '(AppProjectInkoopPlanningsRegel -> LVS_Completely_Received)') {
+    fail('tooltip noemt LVS_Completely_Received van de planningsregel: ' . json_encode(elpis_line_tooltips($kvtCompletelyLine)));
 }
 if (($kvtCompletelyLine['expected_receipt_date'] ?? '') !== '2026-10-01') {
     fail('de KVT-datum blijft de verwachte datum');
@@ -1098,7 +1135,7 @@ $GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $ent
         return [['No' => 'PI20002946', 'InventoryField' => 5]];
     }
     if ($entity === ELPI_WORK_ORDER_ENTITY) {
-        return [['No' => 'WO2610118', 'Description' => 'Werkorder']];
+        return [['No' => 'WO2610118', 'Task_Description' => 'Werkorder']];
     }
 
     return [];
@@ -1219,8 +1256,8 @@ file_put_contents($stalePath, json_encode([
 if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
     fail('projectcache zonder versie wordt genegeerd');
 }
-if (ELPI_PROJECT_CACHE_VERSION !== 8) {
-    fail('projectcacheversie moet 8 zijn zodat PurchaseLines opnieuw zonder Promised_Receipt_Date wordt opgehaald');
+if (ELPI_PROJECT_CACHE_VERSION !== 9) {
+    fail('projectcacheversie moet 9 zijn zodat PurchaseLines zonder LVS_Completely_Received opnieuw wordt opgehaald');
 }
 $previousVersionPath = elpis_project_cache_path('Koninklijke van Twist', '153390');
 file_put_contents($previousVersionPath, json_encode([
@@ -1399,7 +1436,7 @@ $GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $ent
         ];
     }
     if ($entity === ELPI_WORK_ORDER_ENTITY) {
-        return [['No' => '4066161', 'Description' => 'Werkorder']];
+        return [['No' => '4066161', 'Task_Description' => 'Werkorder']];
     }
     if ($entity !== ELPI_PURCHASE_ORDER_LINE_ENTITY) {
         return [];
