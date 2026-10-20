@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 5;
+const ELPI_PROJECT_CACHE_VERSION = 6;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -1343,6 +1343,7 @@ function elpis_attach_inkoop_planning_rows(array $linesByProject, array $inkoopR
             continue;
         }
         $consumedSupply = [];
+        $mergedByPlanningKey = [];
         foreach ($lines as $index => $line) {
             if (!is_array($line)) {
                 continue;
@@ -1357,6 +1358,7 @@ function elpis_attach_inkoop_planning_rows(array $linesByProject, array $inkoopR
             }
             $row = $byPlanningKey[$planningKey];
             $linesByProject[$projectNo][$index] = elpis_merge_inkoop_planning_line($line, $row);
+            $mergedByPlanningKey[$index] = true;
             $itemNo = trim((string) ($row['No'] ?? $line['item_no'] ?? ''));
             if ($itemNo !== '') {
                 $consumedSupply[elpis_inkoop_supply_key((string) ($row['Job_No'] ?? $projectNo), $itemNo, (string) ($row['LVS_Work_Order_No'] ?? ''))] = true;
@@ -1365,10 +1367,13 @@ function elpis_attach_inkoop_planning_rows(array $linesByProject, array $inkoopR
 
         $pending = [];
         foreach ($linesByProject[$projectNo] as $index => $line) {
-            if (!is_array($line)) {
+            if (!is_array($line) || isset($mergedByPlanningKey[$index])) {
                 continue;
             }
-            if (trim((string) ($line['purchase_order_no'] ?? '')) !== '' && (int) ($line['purchase_order_line_no'] ?? 0) > 0) {
+            // Een regel mét werkorder die al document én regelnummer heeft, blijft zo.
+            // Zonder werkorder kan dat regelnummer van de projectregel komen en wijkt
+            // het af van PurchaseLines.Line_No; de inkoopplanningsregel heeft het echte paar.
+            if (trim((string) ($line['work_order_no'] ?? '')) !== '' && trim((string) ($line['purchase_order_no'] ?? '')) !== '' && (int) ($line['purchase_order_line_no'] ?? 0) > 0) {
                 continue;
             }
             $itemNo = trim((string) ($line['item_no'] ?? ''));
@@ -1417,7 +1422,9 @@ function elpis_merge_inkoop_planning_line(array $line, array $inkoopRow): array
     }
 
     $purchaseOrderLineNo = (int) ($inkoopRow['LVS_Purchase_Order_Line_No'] ?? 0);
-    if ($purchaseOrderLineNo > 0 && (int) ($line['purchase_order_line_no'] ?? 0) <= 0) {
+    $noWorkOrder = trim((string) ($line['work_order_no'] ?? '')) === ''
+        && trim((string) ($inkoopRow['LVS_Work_Order_No'] ?? '')) === '';
+    if ($purchaseOrderLineNo > 0 && ($noWorkOrder || (int) ($line['purchase_order_line_no'] ?? 0) <= 0)) {
         $line['purchase_order_line_no'] = $purchaseOrderLineNo;
     }
 
@@ -1496,7 +1503,7 @@ function elpis_reservation_status_matches(string $status): bool
 
 function elpis_purchase_line_select_fields(): string
 {
-    return 'Document_No,Line_No,No,Document_Type,Expected_Receipt_Date,Promised_Receipt_Date,Planned_Receipt_Date,LVS_Completely_Received,Outstanding_Quantity';
+    return 'Document_No,Line_No,No,Document_Type,Quantity,Expected_Receipt_Date,Promised_Receipt_Date,Planned_Receipt_Date,LVS_Completely_Received,Outstanding_Quantity';
 }
 
 function elpis_purchase_line_open_filter(): string
@@ -1636,8 +1643,11 @@ function elpis_normalize_purchase_order_line(array $row): array
         'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['Expected_Receipt_Date'] ?? '')),
         'promised_receipt_date' => elpis_normalize_bc_date((string) ($row['Promised_Receipt_Date'] ?? '')),
         'planned_receipt_date' => elpis_normalize_bc_date((string) ($row['Planned_Receipt_Date'] ?? '')),
-        'outstanding_qty' => array_key_exists('Outstanding_Quantity', $row) ? (float) $row['Outstanding_Quantity'] : null,
-        'completely_received' => elpis_bc_bool($row['LVS_Completely_Received'] ?? false),
+        'quantity' => array_key_exists('Quantity', $row) ? (float) $row['Quantity'] : (array_key_exists('quantity', $row) ? (float) $row['quantity'] : null),
+        'outstanding_qty' => array_key_exists('Outstanding_Quantity', $row) ? (float) $row['Outstanding_Quantity'] : (array_key_exists('outstanding_qty', $row) ? (float) $row['outstanding_qty'] : null),
+        'completely_received' => array_key_exists('completely_received', $row) && !array_key_exists('LVS_Completely_Received', $row)
+            ? elpis_bc_bool($row['completely_received'])
+            : elpis_bc_bool($row['LVS_Completely_Received'] ?? false),
     ];
 }
 
@@ -2521,12 +2531,18 @@ function elpis_match_purchase_line(array $line, array $byDocLine, array $byDocIt
 
     $itemNo = strtoupper(trim((string) ($line['item_no'] ?? '')));
     $purchaseLineNo = (int) ($line['purchase_order_line_no'] ?? 0);
+    $exactOnly = trim((string) ($line['work_order_no'] ?? '')) === '';
     if ($purchaseLineNo > 0 && isset($byDocLine[$documentNo . '|' . $purchaseLineNo]) && is_array($byDocLine[$documentNo . '|' . $purchaseLineNo])) {
         $candidate = $byDocLine[$documentNo . '|' . $purchaseLineNo];
         $candidateItem = strtoupper(trim((string) ($candidate['item_no'] ?? '')));
         if ($candidateItem === '' || $itemNo === '' || $candidateItem === $itemNo) {
             return $candidate;
         }
+        if ($exactOnly) {
+            return null;
+        }
+    } elseif ($exactOnly) {
+        return null;
     }
 
     if ($itemNo === '') {
@@ -2616,6 +2632,9 @@ function elpis_finalize_line(
         }
         if (array_key_exists('outstanding_qty', $purchase) && $purchase['outstanding_qty'] !== null && $purchase['outstanding_qty'] !== '') {
             $line['purchase_outstanding_qty'] = (float) $purchase['outstanding_qty'];
+        }
+        if (trim((string) ($line['work_order_no'] ?? '')) === '' && array_key_exists('quantity', $purchase) && $purchase['quantity'] !== null && (float) $purchase['quantity'] > 0.00001) {
+            $line['qty_ordered'] = (float) $purchase['quantity'];
         }
         $line = elpis_apply_purchase_line_quantities($line);
     }
