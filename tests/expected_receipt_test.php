@@ -652,8 +652,8 @@ foreach ($ambiguousNoWo['153390'] as $ambiguousLine) {
     }
 }
 
-// WerkordersLines-select heeft geen LVS_Outstanding_Qty_Base. Ontbreekt dat veld,
-// dan vult de UI besteld/ontvangen al volledig, zonder inkoop_outstanding_qty.
+// WerkordersLines-select heeft geen Outstanding_Quantity. Een ontbrekend of 0
+// LVS_Outstanding_Qty_Base vult Ontvangen niet; zonder inkoopregel blijft de regel open.
 $shownFullRows = [
     [
         'No' => 'PI20001429',
@@ -670,6 +670,7 @@ $shownFullRows = [
         'Remaining_Qty' => 112,
         'LVS_Purchase_Order_No' => 'PO12600678',
         'LVS_Purchase_Order_Line_No' => 10000,
+        'LVS_Outstanding_Qty_Base' => 0,
     ],
 ];
 foreach ($shownFullRows as $shownRow) {
@@ -680,21 +681,19 @@ foreach ($shownFullRows as $shownRow) {
         'LVS_Work_Order_No' => '',
         'KVT_Expected_Receipt_Date' => '2026-09-01',
         'KVT_Status_Material' => 'O',
+        'LVS_Completely_Received' => false,
     ], $shownRow)));
     $shownPayload = elpis_line_public_payload($shownLine, '153390');
     $ordered = elpis_line_shown_ordered_qty($shownLine);
     $received = elpis_line_shown_received_qty($shownLine);
-    if (abs($ordered - (float) $shownRow['Quantity']) > 0.00001 || abs($received - $ordered) > 0.00001 || $shownPayload['qty_ordered'] !== $ordered || $shownPayload['qty_received'] !== $received) {
-        fail($shownRow['No'] . ' moet dezelfde besteld/ontvangen tonen als de status gebruikt: ' . json_encode($shownPayload));
+    if (abs($ordered - (float) $shownRow['Quantity']) > 0.00001 || $received > 0.00001 || $shownPayload['qty_ordered'] !== $ordered || $shownPayload['qty_received'] !== $received) {
+        fail($shownRow['No'] . ' mag Ontvangen niet uit besteld of werkorder-outstanding halen: ' . json_encode($shownPayload));
     }
     if (array_key_exists('inkoop_outstanding_qty', $shownLine) || elpis_line_inkoop_outstanding_closed($shownLine) || elpis_line_purchase_outstanding_closed($shownLine)) {
-        fail($shownRow['No'] . ' heeft geen outstanding-veld; #11 kijkt daar juist naar: ' . json_encode($shownLine));
+        fail($shownRow['No'] . ' heeft geen inkoopregel-outstanding: ' . json_encode($shownLine));
     }
-    if (!elpis_line_is_received($shownLine) || elpis_line_is_late($shownLine) || ($shownLine['receipt_state'] ?? '') !== 'received' || ($shownPayload['expected_receipt'] ?? '') === 'Te laat' || ($shownPayload['receipt_state'] ?? '') !== 'received' || ($shownLine['material_status'] ?? '') !== 'O' || ($shownLine['work_order_no'] ?? '') !== '' || elpis_line_row_tone($shownLine) === 'alert' || elpis_mail_line_matches_content($shownLine, 'both')) {
-        fail($shownRow['No'] . ' zonder werkorder is getoond als ontvangen en niet te laat: ' . json_encode($shownLine));
-    }
-    if ((elpis_line_tooltips($shownLine)['expected_receipt'] ?? '') !== '(AppProjectInkoopPlanningsRegel -> LVS_Quantity_Order_UoM)') {
-        fail($shownRow['No'] . ' tooltip noemt de getoonde bestelhoeveelheid: ' . json_encode(elpis_line_tooltips($shownLine)));
+    if (elpis_line_is_received($shownLine) || !elpis_line_is_late($shownLine) || ($shownLine['receipt_state'] ?? '') !== 'late' || ($shownPayload['expected_receipt'] ?? '') !== 'Te laat' || ($shownPayload['receipt_state'] ?? '') !== 'late' || ($shownLine['material_status'] ?? '') !== 'O' || !elpis_mail_line_matches_content($shownLine, 'both')) {
+        fail($shownRow['No'] . ' zonder ontvangst of inkoopregel blijft te laat: ' . json_encode($shownLine));
     }
 }
 
@@ -748,8 +747,105 @@ $shownStatusTFull = elpis_refresh_receipt_state(elpis_normalize_planning_line_ro
     'KVT_Expected_Receipt_Date' => '2026-09-01',
     'KVT_Status_Material' => 'T',
 ]));
-if (($shownStatusTFull['material_status'] ?? '') !== 'T' || elpis_line_filter_status($shownStatusTFull) !== 'T' || elpis_line_row_tone($shownStatusTFull) !== 'alert' || elpis_line_is_late($shownStatusTFull) || elpis_line_expected_receipt_display($shownStatusTFull) === 'Te laat') {
-    fail('materiaalstatus T blijft rood als de getoonde hoeveelheid al ontvangen is: ' . json_encode($shownStatusTFull));
+if (($shownStatusTFull['material_status'] ?? '') !== 'T' || ($shownStatusTFull['receipt_state'] ?? '') !== 'late' || elpis_line_expected_receipt_display($shownStatusTFull) !== 'Te laat' || elpis_line_row_tone($shownStatusTFull) !== 'alert' || !elpis_line_is_late($shownStatusTFull) || elpis_line_shown_received_qty($shownStatusTFull) > 0.00001) {
+    fail('materiaalstatus T zonder echte ontvangst blijft te laat en rood: ' . json_encode($shownStatusTFull));
+}
+
+// BC: niet ontvangen, maar LVS_Outstanding_Qty_Base op de werkorderregel is 0.
+// Ontvangen mag alleen uit de inkoopregel (Outstanding_Quantity) of een ontvangstpost.
+$openPurchaseCases = [
+    ['item_no' => 'PI24003010', 'work_order_no' => '4066162', 'line_no' => 8000, 'purchase_order_no' => '4500124003', 'quantity' => 2.0, 'outstanding_qty' => 2.0],
+    ['item_no' => 'PI28127010', 'work_order_no' => '4066162', 'line_no' => 13000, 'purchase_order_no' => '4500128127', 'quantity' => 1.0, 'outstanding_qty' => 1.0],
+    ['item_no' => 'PI27751010', 'work_order_no' => '4066164', 'line_no' => 14000, 'purchase_order_no' => '4500127751', 'quantity' => 1.0, 'outstanding_qty' => 1.0],
+];
+$openPurchaseLines = [];
+$openPurchaseInkoop = [];
+$openPurchaseOrders = [];
+foreach ($openPurchaseCases as $case) {
+    $openPurchaseLines[] = elpis_normalize_planning_line_row([
+        'Job_No' => 'PRJ4066162',
+        'Job_Task_No' => '100',
+        'Line_No' => $case['line_no'],
+        'No' => $case['item_no'],
+        'Description' => $case['item_no'],
+        'Quantity' => $case['quantity'],
+        'Remaining_Qty' => $case['quantity'],
+        'LVS_Work_Order_No' => $case['work_order_no'],
+        'LVS_Purchase_Order_No' => $case['purchase_order_no'],
+        'LVS_Purchase_Order_Line_No' => 10000,
+        'LVS_Quantity_Order_UoM' => $case['quantity'],
+        'LVS_Outstanding_Qty_Base' => 0,
+        'LVS_Completely_Received' => false,
+        'KVT_Expected_Receipt_Date' => '2026-09-01',
+        'KVT_Status_Material' => 'X',
+    ]);
+    $normalizedOpen = $openPurchaseLines[array_key_last($openPurchaseLines)];
+    if (elpis_line_shown_received_qty($normalizedOpen) > 0.00001 || abs(elpis_line_shown_ordered_qty($normalizedOpen) - $case['quantity']) > 0.00001) {
+        fail($case['item_no'] . ' leidt Ontvangen af uit de werkorderregel: ' . json_encode($normalizedOpen));
+    }
+    $openPurchaseInkoop[] = [
+        'Job_No' => 'PRJ4066162',
+        'Job_Task_No' => '100',
+        'Line_No' => $case['line_no'],
+        'No' => $case['item_no'],
+        'LVS_Work_Order_No' => $case['work_order_no'],
+        'LVS_Purchase_Order_No' => $case['purchase_order_no'],
+        'LVS_Purchase_Order_Line_No' => 10000,
+        'LVS_Quantity_Order_UoM' => $case['quantity'],
+        'LVS_Outstanding_Qty_Base' => 0,
+        'LVS_Completely_Received' => false,
+        'KVT_Status_Material' => 'X',
+    ];
+    $openPurchaseOrders[] = [
+        'document_no' => $case['purchase_order_no'],
+        'line_no' => 10000,
+        'item_no' => $case['item_no'],
+        'outstanding_qty' => $case['outstanding_qty'],
+        'completely_received' => false,
+    ];
+}
+$openPurchase = elpis_apply_receipt_expectations(
+    elpis_attach_inkoop_planning_rows(['PRJ4066162' => $openPurchaseLines], $openPurchaseInkoop),
+    [],
+    $openPurchaseOrders,
+    []
+);
+foreach ($openPurchase['PRJ4066162'] as $openLine) {
+    $itemNo = (string) ($openLine['item_no'] ?? '');
+    $payload = elpis_line_public_payload($openLine, 'PRJ4066162');
+    $ordered = elpis_line_shown_ordered_qty($openLine);
+    $received = elpis_line_shown_received_qty($openLine);
+    if ($received > 0.00001 || abs($ordered - $received) <= 0.00001 || ($payload['qty_received'] ?? -1) > 0.00001 || ($payload['qty_ordered'] ?? 0) <= 0.00001) {
+        fail($itemNo . ' toont ontvangen = besteld terwijl Outstanding_Quantity open is: ' . json_encode($payload));
+    }
+    if (elpis_line_is_received($openLine) || ($openLine['receipt_state'] ?? '') !== 'late' || elpis_line_expected_receipt_display($openLine) !== 'Te laat' || ($payload['expected_receipt'] ?? '') !== 'Te laat' || ($openLine['material_status'] ?? '') !== 'X' || !empty($openLine['completely_received']) || elpis_line_row_tone($openLine) !== 'alert' || !elpis_mail_line_matches_content($openLine, 'both')) {
+        fail($itemNo . ' is in BC niet ontvangen en hoort te laat te blijven: ' . json_encode($openLine));
+    }
+}
+$openPartial = elpis_apply_receipt_expectations(['PRJ4066162' => [elpis_normalize_planning_line_row([
+    'Job_No' => 'PRJ4066162',
+    'Job_Task_No' => '100',
+    'Line_No' => 15000,
+    'No' => 'PI24003010',
+    'Quantity' => 2,
+    'Remaining_Qty' => 2,
+    'LVS_Work_Order_No' => '4066162',
+    'LVS_Purchase_Order_No' => '4500124003',
+    'LVS_Purchase_Order_Line_No' => 20000,
+    'LVS_Outstanding_Qty_Base' => 0,
+    'LVS_Completely_Received' => false,
+    'KVT_Expected_Receipt_Date' => '2026-09-01',
+    'KVT_Status_Material' => 'X',
+])]], [], [[
+    'document_no' => '4500124003',
+    'line_no' => 20000,
+    'item_no' => 'PI24003010',
+    'outstanding_qty' => 1,
+    'completely_received' => false,
+]], []);
+$openPartialLine = $openPartial['PRJ4066162'][0];
+if (abs(elpis_line_shown_received_qty($openPartialLine) - 1) > 0.00001 || abs(elpis_line_shown_ordered_qty($openPartialLine) - 2) > 0.00001 || ($openPartialLine['receipt_state'] ?? '') !== 'late' || elpis_line_expected_receipt_display($openPartialLine) !== 'Te laat' || elpis_line_is_received($openPartialLine)) {
+    fail('gedeeltelijk ontvangen met verlopen datum blijft te laat: ' . json_encode($openPartialLine));
 }
 
 $ledgerFull = elpis_apply_receipt_expectations(['P' => [planningLine([
@@ -1047,8 +1143,8 @@ file_put_contents($stalePath, json_encode([
 if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
     fail('projectcache zonder versie wordt genegeerd');
 }
-if (ELPI_PROJECT_CACHE_VERSION !== 4) {
-    fail('projectcacheversie moet 4 zijn zodat regels van #11 opnieuw worden afgeleid');
+if (ELPI_PROJECT_CACHE_VERSION !== 5) {
+    fail('projectcacheversie moet 5 zijn zodat afgeleide Ontvangen uit #12 opnieuw wordt berekend');
 }
 $previousVersionPath = elpis_project_cache_path('Koninklijke van Twist', '153390');
 file_put_contents($previousVersionPath, json_encode([
@@ -1057,16 +1153,25 @@ file_put_contents($previousVersionPath, json_encode([
     'project_no' => '153390',
     'cached_at' => time(),
     'expires_at' => time() + 3600,
-    'lines' => [array_merge($shownStatusTFull, ['receipt_state' => 'late'])],
+    'lines' => [array_merge($shownStatusTFull, [
+        'qty_ordered' => 2,
+        'qty_received' => 2,
+        'receipt_state' => 'received',
+    ])],
 ]));
 if (elpis_read_project_cache('Koninklijke van Twist', '153390') !== null) {
     fail('projectcache van de vorige versie wordt bij verversen niet hergebruikt');
 }
-$recomputed = array_merge($shownStatusTFull, ['receipt_state' => 'late']);
+$recomputed = array_merge($shownStatusTFull, [
+    'qty_ordered' => 2,
+    'qty_received' => 2,
+    'qty_open' => 0,
+    'receipt_state' => 'received',
+]);
 elpis_write_project_cache('Koninklijke van Twist', '153390', [$recomputed]);
 $reread = elpis_read_project_cache('Koninklijke van Twist', '153390');
-if (($reread['lines'][0]['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($reread['lines'][0])) {
-    fail('lezen van de projectcache herberekent een volledig getoonde ontvangst: ' . json_encode($reread['lines'][0] ?? null));
+if (($reread['lines'][0]['receipt_state'] ?? '') === 'received' || !elpis_line_is_late($reread['lines'][0]) || elpis_line_expected_receipt_display($reread['lines'][0]) !== 'Te laat' || ($reread['lines'][0]['material_status'] ?? '') !== 'T' || elpis_line_row_tone($reread['lines'][0]) !== 'alert') {
+    fail('ontvangen >= besteld zonder inkoopregel of ontvangstpost blijft te laat: ' . json_encode($reread['lines'][0] ?? null));
 }
 
 $index = (string) file_get_contents(dirname(__DIR__) . '/web/index.php');
