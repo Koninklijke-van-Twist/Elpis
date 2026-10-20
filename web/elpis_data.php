@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 8;
+const ELPI_PROJECT_CACHE_VERSION = 9;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -1023,14 +1023,16 @@ function elpis_trace_normalized_line(array $line, string $qtySource): void
 
 function elpis_planning_date_from_row(array $row): array
 {
-    $planning = elpis_normalize_bc_date((string) ($row['Planning_Date'] ?? ''));
-    if ($planning !== '') {
-        return ['date' => substr($planning, 0, 10), 'field' => 'Planning_Date'];
-    }
-
-    $plannedDelivery = elpis_normalize_bc_date((string) ($row['Planned_Delivery_Date'] ?? ''));
-    if ($plannedDelivery !== '') {
-        return ['date' => substr($plannedDelivery, 0, 10), 'field' => 'Planned_Delivery_Date'];
+    foreach ([
+        'Planning_Date' => 'Planning_Date',
+        'Planned_Delivery_Date' => 'Planned_Delivery_Date',
+        'Promised_Delivery_Date' => 'Promised_Delivery_Date',
+        'Requested_Delivery_Date' => 'Requested_Delivery_Date',
+    ] as $field => $label) {
+        $date = elpis_normalize_bc_date((string) ($row[$field] ?? ''));
+        if ($date !== '') {
+            return ['date' => substr($date, 0, 10), 'field' => $label];
+        }
     }
 
     return ['date' => '', 'field' => 'Planning_Date'];
@@ -1162,7 +1164,9 @@ function elpis_werkorders_line_select_fields(): string
 
 function elpis_inkoop_planning_select_fields(): string
 {
-    return 'Job_No,Job_Task_No,Line_No,Job_Contract_Entry_No,No,KVT_Expected_Receipt_Date,Planning_Date,Planned_Delivery_Date,Reserved_Quantity,LVS_Purchase_Order_No,LVS_Purchase_Order_Line_No,LVS_Work_Order_No,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Completely_Received,KVT_Status_Material,KVT_Qty_Picked,KVT_Completely_Picked';
+    // KVT_Qty_Picked en KVT_Completely_Picked staan op WerkordersLines, niet hier.
+    // LVS_Completely_Received van deze planningsregel telt als volledig ontvangen.
+    return 'Job_No,Job_Task_No,Line_No,No,Type,KVT_Expected_Receipt_Date,Planned_Delivery_Date,Promised_Delivery_Date,Requested_Delivery_Date,Reserved_Quantity,Remaining_Qty,LVS_Purchase_Order_No,LVS_Purchase_Order_Line_No,LVS_Work_Order_No,LVS_Outstanding_Qty_Base,LVS_Completely_Received,KVT_Status_Material';
 }
 
 function elpis_planning_line_select_fields(): string
@@ -1539,12 +1543,6 @@ function elpis_merge_inkoop_planning_line(array $line, array $inkoopRow): array
         $line['planning_date_field'] = $planning['field'];
     }
 
-    $picked = (float) ($inkoopRow['KVT_Qty_Picked'] ?? 0);
-    if ($picked > (float) ($line['kvt_qty_picked'] ?? 0)) {
-        $line['kvt_qty_picked'] = $picked;
-    }
-    $line['completely_picked'] = !empty($line['completely_picked']) || elpis_bc_bool($inkoopRow['KVT_Completely_Picked'] ?? false);
-
     $kvtDate = elpis_normalize_bc_date((string) ($inkoopRow['KVT_Expected_Receipt_Date'] ?? ''));
     if ($kvtDate !== '' && elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? '')) === '') {
         $line['expected_receipt_date'] = substr($kvtDate, 0, 10);
@@ -1586,7 +1584,7 @@ function elpis_bc_bool(mixed $value): bool
 
 function elpis_reservation_select_fields(): string
 {
-    return 'Entry_No,Positive,Item_No,Quantity_Base,Reservation_Status,Source_Type,Source_Subtype,Source_ID,Source_Ref_No,Expected_Receipt_Date,Quantity';
+    return 'Entry_No,Positive,Item_No,Quantity_Base,Reservation_Status,Source_Type,Source_Subtype,Source_ID,Source_Ref_No,Expected_Receipt_Date';
 }
 
 function elpis_reservation_status_filter(): string
@@ -1603,10 +1601,9 @@ function elpis_reservation_status_matches(string $status): bool
 
 function elpis_purchase_line_select_fields(): string
 {
-    // Alleen velden die op PurchaseLines bestaan. Promised_Receipt_Date,
-    // Planned_Receipt_Date en Quantity_Received geven HTTP 400 op de hele query.
-    // Job_Task_No is daar het werkordernummer; niet op taak of regeltype filteren.
-    return 'Document_No,Line_No,Document_Type,Type,No,Job_No,Job_Task_No,Job_Line_Type,Quantity,Outstanding_Quantity,Expected_Receipt_Date,LVS_Completely_Received';
+    // LVS_Completely_Received bestaat niet op PurchaseLines en laat de query
+    // met HTTP 400 vallen. Ontvangen is Quantity min Outstanding_Quantity.
+    return 'Document_Type,Document_No,Line_No,Type,No,Job_No,Job_Task_No,Job_Line_Type,Quantity,Outstanding_Quantity,Expected_Receipt_Date';
 }
 
 function elpis_log_purchase_lines_failure(string $company, array $query, string $message): void
@@ -1780,9 +1777,6 @@ function elpis_normalize_purchase_order_line(array $row): array
         'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['Expected_Receipt_Date'] ?? $row['expected_receipt_date'] ?? '')),
         'quantity' => array_key_exists('Quantity', $row) ? (float) $row['Quantity'] : (array_key_exists('quantity', $row) ? (float) $row['quantity'] : null),
         'outstanding_qty' => array_key_exists('Outstanding_Quantity', $row) ? (float) $row['Outstanding_Quantity'] : (array_key_exists('outstanding_qty', $row) ? (float) $row['outstanding_qty'] : null),
-        'completely_received' => array_key_exists('completely_received', $row) && !array_key_exists('LVS_Completely_Received', $row)
-            ? elpis_bc_bool($row['completely_received'])
-            : elpis_bc_bool($row['LVS_Completely_Received'] ?? false),
     ];
 }
 
@@ -2333,6 +2327,11 @@ function elpis_fetch_item_ledger_receipts(string $company, array $projectNos, in
     return $rowsOut;
 }
 
+function elpis_work_order_select_fields(): string
+{
+    return 'No,Task_Description';
+}
+
 function elpis_fetch_work_orders(string $company, array $workOrderNos, int $ttl = ELPI_CACHE_TTL): array
 {
     $company = trim($company);
@@ -2346,7 +2345,7 @@ function elpis_fetch_work_orders(string $company, array $workOrderNos, int $ttl 
     $map = [];
     foreach (array_chunk($workOrderNos, ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
         $rows = elpis_try_fetch_rows($company, ELPI_WORK_ORDER_ENTITY, [
-            '$select' => 'No,Description',
+            '$select' => elpis_work_order_select_fields(),
             '$filter' => elpis_odata_eq_list('No', $chunk),
         ], $ttl);
         foreach ($rows as $row) {
@@ -2359,7 +2358,7 @@ function elpis_fetch_work_orders(string $company, array $workOrderNos, int $ttl 
             }
             $map[strtoupper($no)] = [
                 'no' => $no,
-                'description' => trim((string) ($row['Description'] ?? '')),
+                'description' => trim((string) ($row['Task_Description'] ?? '')),
             ];
         }
     }
@@ -2787,7 +2786,6 @@ function elpis_trace_purchase_line(?array $purchase): ?array
         'job_line_type' => (string) ($purchase['job_line_type'] ?? ''),
         'quantity' => $purchase['quantity'] ?? null,
         'outstanding_qty' => $purchase['outstanding_qty'] ?? null,
-        'completely_received' => !empty($purchase['completely_received']),
     ];
 }
 
@@ -2871,9 +2869,6 @@ function elpis_finalize_line(
     // maar een gesloten inkoopregel mag daar niet meer 'Te laat' van maken.
     $purchase = elpis_match_purchase_line($line, $byDocLine, $byDocItem);
     if (is_array($purchase)) {
-        if (!empty($purchase['completely_received'])) {
-            $line['completely_received'] = true;
-        }
         if (array_key_exists('outstanding_qty', $purchase) && $purchase['outstanding_qty'] !== null && $purchase['outstanding_qty'] !== '') {
             $line['purchase_outstanding_qty'] = (float) $purchase['outstanding_qty'];
         }
@@ -3335,13 +3330,13 @@ function elpis_line_tooltips(array $line): array
         if (elpis_normalize_bc_date((string) ($line['received_date'] ?? '')) !== '') {
             $receiptSource = 'ItemLedgerEntries -> Posting_Date';
         } elseif (!empty($line['completely_received'])) {
-            $receiptSource = 'PurchaseLines -> LVS_Completely_Received';
+            $receiptSource = 'AppProjectInkoopPlanningsRegel -> LVS_Completely_Received';
         } elseif (elpis_line_purchase_outstanding_closed($line)) {
             $receiptSource = 'PurchaseLines -> Outstanding_Quantity';
         } elseif (elpis_line_ledger_received_qty($line) !== null) {
             $receiptSource = 'ItemLedgerEntries -> Quantity';
         } else {
-            $receiptSource = 'PurchaseLines -> LVS_Completely_Received';
+            $receiptSource = 'AppProjectInkoopPlanningsRegel -> LVS_Completely_Received';
         }
     }
     if ($receiptSource === '') {
@@ -3360,7 +3355,7 @@ function elpis_line_tooltips(array $line): array
         'planning_date' => '(WerkordersLines -> ' . $planningField . ')',
         'material_status' => '(WerkordersLines -> KVT_Status_Material)',
         'to_order' => '(WerkordersLines -> Quantity)',
-        'ordered' => '(AppProjectInkoopPlanningsRegel -> LVS_Quantity_Order_UoM)',
+        'ordered' => '(PurchaseLines -> Quantity)',
         'open' => '(PurchaseLines -> Outstanding_Quantity)',
         'received' => '(PurchaseLines -> Outstanding_Quantity)',
         'expected_receipt' => '(' . $receiptSource . ')',
