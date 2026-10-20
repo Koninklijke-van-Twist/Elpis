@@ -751,17 +751,21 @@ if (($shownStatusTFull['material_status'] ?? '') !== 'T' || ($shownStatusTFull['
     fail('materiaalstatus T zonder echte ontvangst blijft te laat en rood: ' . json_encode($shownStatusTFull));
 }
 
-// BC: niet ontvangen, maar LVS_Outstanding_Qty_Base op de werkorderregel is 0.
-// Ontvangen mag alleen uit de inkoopregel (Outstanding_Quantity) of een ontvangstpost.
+// Zelfde afleiding: open inkoopregel (status X) blijft te laat; Outstanding_Quantity 0
+// zonder werkorder telt als ontvangen. LVS_Outstanding_Qty_Base 0 vult Ontvangen niet.
 $openPurchaseCases = [
-    ['item_no' => 'PI24003010', 'work_order_no' => '4066162', 'line_no' => 8000, 'purchase_order_no' => '4500124003', 'quantity' => 2.0, 'outstanding_qty' => 2.0],
-    ['item_no' => 'PI28127010', 'work_order_no' => '4066162', 'line_no' => 13000, 'purchase_order_no' => '4500128127', 'quantity' => 1.0, 'outstanding_qty' => 1.0],
-    ['item_no' => 'PI27751010', 'work_order_no' => '4066164', 'line_no' => 14000, 'purchase_order_no' => '4500127751', 'quantity' => 1.0, 'outstanding_qty' => 1.0],
+    ['item_no' => 'PI24003010', 'work_order_no' => '4066162', 'line_no' => 8000, 'purchase_order_no' => '4500124003', 'purchase_order_line_no' => 10000, 'quantity' => 2.0, 'outstanding_qty' => 2.0, 'material_status' => 'X', 'expect_received' => false],
+    ['item_no' => 'PI28127010', 'work_order_no' => '4066162', 'line_no' => 13000, 'purchase_order_no' => '4500128127', 'purchase_order_line_no' => 10000, 'quantity' => 1.0, 'outstanding_qty' => 1.0, 'material_status' => 'X', 'expect_received' => false],
+    ['item_no' => 'PI27751010', 'work_order_no' => '4066164', 'line_no' => 14000, 'purchase_order_no' => '4500127751', 'purchase_order_line_no' => 10000, 'quantity' => 1.0, 'outstanding_qty' => 1.0, 'material_status' => 'X', 'expect_received' => false],
+    ['item_no' => 'PI20001429', 'work_order_no' => '', 'line_no' => 40000, 'purchase_order_no' => 'PO12602236', 'purchase_order_line_no' => 20000, 'quantity' => 1.0, 'outstanding_qty' => 0.0, 'material_status' => 'O', 'expect_received' => true],
+    ['item_no' => 'PI20000438', 'work_order_no' => '', 'line_no' => 50000, 'purchase_order_no' => 'PO12600678', 'purchase_order_line_no' => 10000, 'quantity' => 112.0, 'outstanding_qty' => 0.0, 'material_status' => 'O', 'expect_received' => true],
 ];
 $openPurchaseLines = [];
 $openPurchaseInkoop = [];
 $openPurchaseOrders = [];
+$openPurchaseByItem = [];
 foreach ($openPurchaseCases as $case) {
+    $openPurchaseByItem[$case['item_no']] = $case;
     $openPurchaseLines[] = elpis_normalize_planning_line_row([
         'Job_No' => 'PRJ4066162',
         'Job_Task_No' => '100',
@@ -772,12 +776,12 @@ foreach ($openPurchaseCases as $case) {
         'Remaining_Qty' => $case['quantity'],
         'LVS_Work_Order_No' => $case['work_order_no'],
         'LVS_Purchase_Order_No' => $case['purchase_order_no'],
-        'LVS_Purchase_Order_Line_No' => 10000,
+        'LVS_Purchase_Order_Line_No' => $case['purchase_order_line_no'],
         'LVS_Quantity_Order_UoM' => $case['quantity'],
         'LVS_Outstanding_Qty_Base' => 0,
         'LVS_Completely_Received' => false,
         'KVT_Expected_Receipt_Date' => '2026-09-01',
-        'KVT_Status_Material' => 'X',
+        'KVT_Status_Material' => $case['material_status'],
     ]);
     $normalizedOpen = $openPurchaseLines[array_key_last($openPurchaseLines)];
     if (elpis_line_shown_received_qty($normalizedOpen) > 0.00001 || abs(elpis_line_shown_ordered_qty($normalizedOpen) - $case['quantity']) > 0.00001) {
@@ -790,15 +794,15 @@ foreach ($openPurchaseCases as $case) {
         'No' => $case['item_no'],
         'LVS_Work_Order_No' => $case['work_order_no'],
         'LVS_Purchase_Order_No' => $case['purchase_order_no'],
-        'LVS_Purchase_Order_Line_No' => 10000,
+        'LVS_Purchase_Order_Line_No' => $case['purchase_order_line_no'],
         'LVS_Quantity_Order_UoM' => $case['quantity'],
         'LVS_Outstanding_Qty_Base' => 0,
         'LVS_Completely_Received' => false,
-        'KVT_Status_Material' => 'X',
+        'KVT_Status_Material' => $case['material_status'],
     ];
     $openPurchaseOrders[] = [
         'document_no' => $case['purchase_order_no'],
-        'line_no' => 10000,
+        'line_no' => $case['purchase_order_line_no'],
         'item_no' => $case['item_no'],
         'outstanding_qty' => $case['outstanding_qty'],
         'completely_received' => false,
@@ -810,15 +814,31 @@ $openPurchase = elpis_apply_receipt_expectations(
     $openPurchaseOrders,
     []
 );
+if (count($openPurchase['PRJ4066162'] ?? []) !== count($openPurchaseCases)) {
+    fail('de vijf ontvangstgevallen horen samen in één project: ' . json_encode(array_column($openPurchase['PRJ4066162'] ?? [], 'item_no')));
+}
 foreach ($openPurchase['PRJ4066162'] as $openLine) {
     $itemNo = (string) ($openLine['item_no'] ?? '');
+    $case = $openPurchaseByItem[$itemNo] ?? null;
+    if (!is_array($case)) {
+        fail('onverwachte regel in de ontvangstgevallen: ' . json_encode($openLine));
+    }
     $payload = elpis_line_public_payload($openLine, 'PRJ4066162');
     $ordered = elpis_line_shown_ordered_qty($openLine);
     $received = elpis_line_shown_received_qty($openLine);
-    if ($received > 0.00001 || abs($ordered - $received) <= 0.00001 || ($payload['qty_received'] ?? -1) > 0.00001 || ($payload['qty_ordered'] ?? 0) <= 0.00001) {
+    if (($openLine['work_order_no'] ?? '') !== $case['work_order_no'] || ($openLine['material_status'] ?? '') !== $case['material_status'] || abs($ordered - $case['quantity']) > 0.00001 || ($payload['qty_ordered'] ?? null) !== $ordered || ($payload['qty_received'] ?? null) !== $received) {
+        fail($itemNo . ' wijkt af van het testgeval: ' . json_encode($payload));
+    }
+    if ($case['expect_received']) {
+        if (abs($received - $ordered) > 0.00001 || !elpis_line_is_received($openLine) || elpis_line_is_late($openLine) || ($openLine['receipt_state'] ?? '') !== 'received' || ($payload['expected_receipt'] ?? '') === 'Te laat' || elpis_line_expected_receipt_display($openLine) === 'Te laat' || elpis_line_row_tone($openLine) === 'alert' || elpis_mail_line_matches_content($openLine, 'both') || (elpis_line_tooltips($openLine)['expected_receipt'] ?? '') !== '(PurchaseLines -> Outstanding_Quantity)') {
+            fail($itemNo . ' zonder werkorder en Outstanding_Quantity 0 hoort ontvangen te zijn: ' . json_encode($openLine));
+        }
+        continue;
+    }
+    if ($received > 0.00001 || abs($ordered - $received) <= 0.00001 || ($payload['qty_received'] ?? -1) > 0.00001) {
         fail($itemNo . ' toont ontvangen = besteld terwijl Outstanding_Quantity open is: ' . json_encode($payload));
     }
-    if (elpis_line_is_received($openLine) || ($openLine['receipt_state'] ?? '') !== 'late' || elpis_line_expected_receipt_display($openLine) !== 'Te laat' || ($payload['expected_receipt'] ?? '') !== 'Te laat' || ($openLine['material_status'] ?? '') !== 'X' || !empty($openLine['completely_received']) || elpis_line_row_tone($openLine) !== 'alert' || !elpis_mail_line_matches_content($openLine, 'both')) {
+    if (elpis_line_is_received($openLine) || ($openLine['receipt_state'] ?? '') !== 'late' || elpis_line_expected_receipt_display($openLine) !== 'Te laat' || ($payload['expected_receipt'] ?? '') !== 'Te laat' || !empty($openLine['completely_received']) || elpis_line_row_tone($openLine) !== 'alert' || !elpis_mail_line_matches_content($openLine, 'both')) {
         fail($itemNo . ' is in BC niet ontvangen en hoort te laat te blijven: ' . json_encode($openLine));
     }
 }
