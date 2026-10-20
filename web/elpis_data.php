@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 3;
+const ELPI_PROJECT_CACHE_VERSION = 4;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -654,6 +654,24 @@ function elpis_line_ledger_received_qty(array $line): ?float
     return (float) $value;
 }
 
+function elpis_line_shown_ordered_qty(array $line): float
+{
+    return (float) ($line['qty_ordered'] ?? 0);
+}
+
+function elpis_line_shown_received_qty(array $line): float
+{
+    return (float) ($line['qty_received'] ?? 0);
+}
+
+function elpis_line_shown_qty_fully_received(array $line): bool
+{
+    $ordered = elpis_line_shown_ordered_qty($line);
+    $received = elpis_line_shown_received_qty($line);
+
+    return $ordered > 0.00001 && $received + 0.00001 >= $ordered;
+}
+
 function elpis_line_is_received(array $line): bool
 {
     if (!empty($line['completely_received']) || !empty($line['completely_picked'])) {
@@ -661,6 +679,10 @@ function elpis_line_is_received(array $line): bool
     }
 
     if (elpis_line_purchase_outstanding_closed($line) || elpis_line_inkoop_outstanding_closed($line)) {
+        return true;
+    }
+
+    if (elpis_line_shown_qty_fully_received($line)) {
         return true;
     }
 
@@ -704,7 +726,7 @@ function elpis_refresh_receipt_state(array $line): array
 
 function elpis_line_is_late(array $line, ?string $today = null): bool
 {
-    if (elpis_line_is_received($line) || elpis_line_is_not_required($line)) {
+    if (elpis_line_is_received($line) || elpis_line_shown_qty_fully_received($line) || elpis_line_is_not_required($line)) {
         return false;
     }
 
@@ -2968,6 +2990,8 @@ function elpis_line_tooltips(array $line): array
             $receiptSource = 'PurchaseLines -> Outstanding_Quantity';
         } elseif (elpis_line_inkoop_outstanding_closed($line)) {
             $receiptSource = 'AppProjectInkoopPlanningsRegel -> LVS_Outstanding_Qty_Base';
+        } elseif (elpis_line_shown_qty_fully_received($line)) {
+            $receiptSource = 'AppProjectInkoopPlanningsRegel -> LVS_Quantity_Order_UoM';
         } else {
             $receiptSource = 'PurchaseLines -> LVS_Completely_Received';
         }
@@ -3007,6 +3031,7 @@ function elpis_format_qty(float $value): string
 
 function elpis_line_public_payload(array $line, string $projectNo): array
 {
+    $line = elpis_refresh_receipt_state($line);
     $materialStatus = (string) ($line['material_status'] ?? '');
     $materialLabel = (string) ($line['material_status_label'] ?? '');
     if ($materialLabel === '' && $materialStatus !== '' && function_exists('elpis_material_status_label')) {
@@ -3015,6 +3040,8 @@ function elpis_line_public_payload(array $line, string $projectNo): array
 
     $freeStock = $line['free_stock'] ?? null;
     $freeDisplay = is_numeric($freeStock) ? elpis_format_qty((float) $freeStock) : '';
+    $orderedQty = elpis_line_shown_ordered_qty($line);
+    $receivedQty = elpis_line_shown_received_qty($line);
 
     return [
         'work_order_no' => (string) ($line['work_order_no'] ?? ''),
@@ -3025,13 +3052,13 @@ function elpis_line_public_payload(array $line, string $projectNo): array
         'material_status' => $materialStatus,
         'material_status_label' => $materialLabel,
         'qty_to_order' => (float) ($line['qty_to_order'] ?? 0),
-        'qty_ordered' => (float) ($line['qty_ordered'] ?? 0),
+        'qty_ordered' => $orderedQty,
         'qty_open' => (float) ($line['qty_open'] ?? 0),
-        'qty_received' => (float) ($line['qty_received'] ?? 0),
+        'qty_received' => $receivedQty,
         'qty_to_order_display' => elpis_format_qty((float) ($line['qty_to_order'] ?? 0)),
-        'qty_ordered_display' => elpis_format_qty((float) ($line['qty_ordered'] ?? 0)),
+        'qty_ordered_display' => elpis_format_qty($orderedQty),
         'qty_open_display' => elpis_format_qty((float) ($line['qty_open'] ?? 0)),
-        'qty_received_display' => elpis_format_qty((float) ($line['qty_received'] ?? 0)),
+        'qty_received_display' => elpis_format_qty($receivedQty),
         'expected_receipt' => elpis_line_expected_receipt_display($line),
         'expected_receipt_sort' => elpis_receipt_sort_value($line),
         'free_stock_display' => $freeDisplay,
