@@ -1438,4 +1438,87 @@ if (($bcWorkOrder['work_order_no'] ?? '') !== '4066161' || ($bcWorkOrder['purcha
     fail('de werkorderregel 4066161/2585000 blijft los van de inkoopregel: ' . json_encode($bcWorkOrder));
 }
 
+$debugPlanning = [[
+    'Job_No' => '153390',
+    'Job_Task_No' => '4066162',
+    'Line_No' => 383000,
+    'Type' => 'Artikel',
+    'No' => 'PI20000438',
+    'Description' => 'M24 bouten',
+    'Quantity' => 112,
+    'Remaining_Qty' => 112,
+    'LVS_Work_Order_No' => '',
+    'LVS_Purchase_Order_No' => 'PO12600678',
+    'LVS_Purchase_Order_Line_No' => 10000,
+    'KVT_Expected_Receipt_Date' => '2026-09-01',
+    'KVT_Status_Material' => 'O',
+]];
+$debugPurchase = [[
+    'Document_No' => 'PO12600678',
+    'Line_No' => 10000,
+    'No' => 'PI20000438',
+    'Document_Type' => 'Order',
+    'Job_No' => '153390',
+    'Job_Task_No' => '4066162',
+    'Job_Line_Type' => '',
+    'Quantity' => 1,
+    'Outstanding_Quantity' => 0,
+    'LVS_Completely_Received' => false,
+]];
+$debugPurchaseRows = $debugPurchase;
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity) use ($debugPlanning, &$debugPurchaseRows): array {
+    if ($entity === ELPI_PLANNING_LINE_ENTITY) {
+        return $debugPlanning;
+    }
+    if ($entity === ELPI_PURCHASE_ORDER_LINE_ENTITY) {
+        return $debugPurchaseRows;
+    }
+
+    return [];
+};
+elpis_reset_fetch_memo();
+$debugHit = elpis_debug_project_line('Koninklijke van Twist', '153390', 'PI20000438', true);
+$debugLine = $debugHit['lines'][0] ?? null;
+$debugFinalize = null;
+$debugNormalize = null;
+foreach ($debugHit['steps'] as $debugStep) {
+    if (($debugStep['step'] ?? '') === 'finalize') {
+        $debugFinalize = $debugStep;
+    }
+    if (($debugStep['step'] ?? '') === 'normalize') {
+        $debugNormalize = $debugStep;
+    }
+}
+if (!is_array($debugLine) || abs((float) ($debugLine['qty_ordered'] ?? -1) - 1) > 0.00001 || abs((float) ($debugLine['qty_open'] ?? -1)) > 0.00001 || abs((float) ($debugLine['qty_received'] ?? -1) - 1) > 0.00001 || (int) ($debugLine['purchase_order_line_no'] ?? 0) !== 10000 || !is_array($debugNormalize) || abs((float) ($debugNormalize['qty_ordered'] ?? -1) - 112) > 0.00001 || !is_array($debugFinalize) || (string) ($debugFinalize['qty_source'] ?? '') !== 'PurchaseLines.Quantity en Outstanding_Quantity' || (int) ($debugFinalize['purchase']['line_no'] ?? 0) !== 10000 || (string) ($debugFinalize['purchase']['job_task_no'] ?? '') !== '4066162' || (string) ($debugFinalize['purchase']['job_line_type'] ?? 'x') !== '') {
+    fail('diagnose toont de inkoopregel als bron nadat normalize 112 zette: ' . json_encode($debugHit));
+}
+if (($debugHit['cache_before']['project']['version_checked'] ?? false) !== true || ($debugHit['cache_before']['mimir']['version_checked'] ?? true) !== false || ($debugHit['cache_before']['odata_file']['version_checked'] ?? true) !== false || ($debugHit['cache_before']['http']['version_checked'] ?? true) !== false || ($debugHit['cache_after']['project']['file_version'] ?? 0) !== ELPI_PROJECT_CACHE_VERSION) {
+    fail('alleen de projectcache controleert de versie: ' . json_encode($debugHit['cache_before']));
+}
+$refreshStep = null;
+foreach ($debugHit['steps'] as $debugStep) {
+    if (($debugStep['step'] ?? '') === 'project-cache') {
+        $refreshStep = $debugStep;
+    }
+}
+if (!is_array($refreshStep) || !empty($refreshStep['hit']) || ($refreshStep['skipped_because'] ?? '') !== 'refresh') {
+    fail('verversen leest de projectcache niet: ' . json_encode($refreshStep));
+}
+$debugPurchaseRows = [];
+elpis_reset_fetch_memo();
+$debugMiss = elpis_debug_project_line('Koninklijke van Twist', '153390', 'PI20000438', true);
+$debugMissLine = $debugMiss['lines'][0] ?? null;
+$purchaseFetches = array_values(array_filter($debugMiss['fetches'], static function (array $fetch): bool {
+    return ($fetch['entity'] ?? '') === ELPI_PURCHASE_ORDER_LINE_ENTITY;
+}));
+if (!is_array($debugMissLine) || abs((float) ($debugMissLine['qty_ordered'] ?? -1) - 112) > 0.00001 || abs((float) ($debugMissLine['qty_open'] ?? -1) - 112) > 0.00001 || abs((float) ($debugMissLine['qty_received'] ?? -1)) > 0.00001 || $purchaseFetches === [] || (int) ($purchaseFetches[0]['rows'] ?? -1) !== 0 || !str_contains((string) ($debugMiss['conclusion'] ?? ''), 'WerkordersLines')) {
+    fail('zonder PurchaseLines-rijen blijft 112/112/0 terwijl finalize wel loopt: ' . json_encode($debugMiss));
+}
+unset($GLOBALS['ELPIS_FETCH_OBSERVER']);
+elpis_reset_fetch_memo();
+$debugPage = (string) file_get_contents(dirname(__DIR__) . '/web/line_debug.php');
+if (!str_contains($debugPage, 'logincheck.php') || !str_contains($debugPage, 'debug_line') || !str_contains($debugPage, 'Cache-Control: no-store')) {
+    fail('line_debug.php moet achter logincheck staan');
+}
+
 echo "OK\n";
