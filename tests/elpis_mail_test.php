@@ -51,6 +51,94 @@ if (!elpis_mail_line_matches_content($late, 'both') || !elpis_mail_line_matches_
     fail('beide neemt te laat en onbevestigd mee');
 }
 
+$mailLines = elpis_apply_receipt_expectations(['PRJ1' => [
+    [
+        'job_task_no' => '200-000-050',
+        'line_no' => 10000,
+        'item_no' => 'PI20001186',
+        'description' => 'Ontvangen via inkoop',
+        'quantity' => 2,
+        'qty_received' => 0,
+        'purchase_order_no' => 'PO12601846',
+        'purchase_order_line_no' => 10000,
+        'work_order_no' => '4066161',
+        'completely_received' => false,
+        'completely_picked' => false,
+        'kvt_qty_picked' => 0,
+        'expected_receipt_date' => '2026-10-01',
+        'material_status' => 'I',
+        'receipt_state' => '',
+        'received_date' => '',
+    ],
+    [
+        'job_task_no' => '200-000-050',
+        'line_no' => 20000,
+        'item_no' => 'PI20000169',
+        'description' => 'Ontvangen via post',
+        'quantity' => 3,
+        'qty_received' => 0,
+        'purchase_order_no' => '',
+        'purchase_order_line_no' => 0,
+        'work_order_no' => '153390',
+        'completely_received' => false,
+        'completely_picked' => false,
+        'kvt_qty_picked' => 0,
+        'expected_receipt_date' => '2026-10-01',
+        'material_status' => 'I',
+        'receipt_state' => '',
+        'received_date' => '',
+    ],
+    [
+        'job_task_no' => '200-000-050',
+        'line_no' => 30000,
+        'item_no' => 'PI24003010',
+        'description' => 'Nog open',
+        'quantity' => 2,
+        'qty_received' => 0,
+        'purchase_order_no' => 'PO12609901',
+        'purchase_order_line_no' => 10000,
+        'work_order_no' => '153390',
+        'completely_received' => false,
+        'completely_picked' => false,
+        'kvt_qty_picked' => 0,
+        'expected_receipt_date' => '2026-10-01',
+        'material_status' => 'I',
+        'receipt_state' => '',
+        'received_date' => '',
+    ],
+]], [], [[
+    'document_no' => 'PO12601846',
+    'line_no' => 10000,
+    'item_no' => 'PI20001186',
+    'completely_received' => true,
+    'outstanding_qty' => 0,
+], [
+    'document_no' => 'PO12609901',
+    'line_no' => 10000,
+    'item_no' => 'PI24003010',
+    'completely_received' => false,
+    'outstanding_qty' => 2,
+]], [], [
+    'receipts' => [[
+        'Job_No' => 'PRJ1',
+        'Job_Task_No' => '200-000-050',
+        'Item_No' => 'PI20000169',
+        'Posting_Date' => '2026-10-09',
+        'Quantity' => 3,
+    ]],
+]);
+$mailed = [];
+foreach ($mailLines['PRJ1'] as $mailLine) {
+    $mailLine['project_no'] = 'PRJ1';
+    if (elpis_mail_line_matches_content($mailLine, 'both')) {
+        $mailed[] = $mailLine;
+    }
+}
+[$mailSubject, $mailPlain] = elpis_digest_message('KVT\\RDBOER', 'rdboer@kvt.nl', $mailed, true);
+if ($mailSubject === '' || count($mailed) !== 1 || !str_contains($mailPlain, 'PI24003010') || str_contains($mailPlain, 'PI20001186') || str_contains($mailPlain, 'PI20000169')) {
+    fail('PM-mail slaat volledig ontvangen regels over: ' . $mailPlain);
+}
+
 $config = elpis_mail_config();
 if (!is_file(elpis_mail_config_path())) {
     fail('mailconfig wordt aangemaakt');

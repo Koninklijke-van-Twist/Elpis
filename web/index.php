@@ -748,6 +748,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
                             'manager' => $projectManager,
                             'project' => $projectNo,
                             'q' => null,
+                            'line_q' => null,
+                            'line_status' => null,
                         ]);
                         ?>
                         <li
@@ -830,7 +832,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
         <div class="elpis-modal-toolbar">
             <label>
                 <?= elpis_h(LOC('elpis.label.line_search')) ?>
-                <input type="search" id="elpis-line-search" autocomplete="off" spellcheck="false" placeholder="<?= elpis_h(LOC('elpis.placeholder.line_search')) ?>">
+                <input type="search" id="elpis-line-search" name="line_q" value="<?= elpis_h(trim((string) ($_GET['line_q'] ?? ''))) ?>" autocomplete="off" spellcheck="false" placeholder="<?= elpis_h(LOC('elpis.placeholder.line_search')) ?>">
             </label>
             <label>
                 <?= elpis_h(LOC('elpis.label.material_status_filter')) ?>
@@ -852,6 +854,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
     </div>
 </div>
 
+<script src="elpis_history.js"></script>
 <script>
 (function () {
     var DELAY_MS = 500;
@@ -863,6 +866,9 @@ $projects = elpis_sort_projects_for_display($projects, []);
 
     var timer = null;
     var inventoryExpanded = false;
+    var pendingNavigationTimer = null;
+    var navigationAborted = false;
+    var activeProgress = null;
 
     function showLoader() {
         loader.classList.add('is-visible');
@@ -986,8 +992,14 @@ $projects = elpis_sort_projects_for_display($projects, []);
         return ['managers', 'projects'];
     }
 
-    function navigateTo(url) {
-        window.location.href = url.pathname + url.search;
+    function navigateTo(url, options) {
+        options = options || {};
+        var target = url.pathname + url.search;
+        if (options.replace) {
+            window.location.replace(target);
+            return;
+        }
+        window.location.assign(target);
     }
 
     function handleProgressEvent(eventData) {
@@ -1011,9 +1023,11 @@ $projects = elpis_sort_projects_for_display($projects, []);
     function runProgressAndNavigate(url, options) {
         options = options || {};
         var delayMs = typeof options.delayMs === 'number' ? options.delayMs : 0;
-        var loadTimer = null;
 
         function startProgressLoad() {
+            if (navigationAborted) {
+                return;
+            }
             clearLoaderTimer();
             showLoader();
             resetStepsGrid(buildStepIds(url));
@@ -1029,16 +1043,24 @@ $projects = elpis_sort_projects_for_display($projects, []);
             });
 
             function finishNavigation() {
-                if (navigationStarted) {
+                if (navigationStarted || navigationAborted) {
                     return;
                 }
                 navigationStarted = true;
                 sessionStorage.setItem('elpis_skip_loader', '1');
                 url.searchParams.set('_loaded', '1');
-                navigateTo(url);
+                var replaceNavigation = ElpisHistory.navigationMode(options.history) === 'replace';
+                navigateTo(url, { replace: replaceNavigation });
             }
 
-            fetch(progressUrl.toString()).then(function (response) {
+            if (activeProgress) {
+                activeProgress.abort();
+            }
+            activeProgress = typeof AbortController === 'function' ? new AbortController() : null;
+
+            fetch(progressUrl.toString(), {
+                signal: activeProgress ? activeProgress.signal : undefined
+            }).then(function (response) {
             if (!response.ok || !response.body) {
                 throw new Error('progress failed');
             }
@@ -1081,13 +1103,19 @@ $projects = elpis_sort_projects_for_display($projects, []);
             }
 
             return readChunk();
-            }).catch(function () {
+            }).catch(function (error) {
+                if (navigationAborted || (error && error.name === 'AbortError')) {
+                    return;
+                }
                 finishNavigation();
             });
         }
 
         if (delayMs > 0) {
-            loadTimer = window.setTimeout(startProgressLoad, delayMs);
+            pendingNavigationTimer = window.setTimeout(function () {
+                pendingNavigationTimer = null;
+                startProgressLoad();
+            }, delayMs);
             return;
         }
 
@@ -1180,13 +1208,36 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
     }
 
+    window.addEventListener('pagehide', function () {
+        navigationAborted = true;
+        if (pendingNavigationTimer !== null) {
+            window.clearTimeout(pendingNavigationTimer);
+            pendingNavigationTimer = null;
+        }
+        if (activeProgress) {
+            activeProgress.abort();
+            activeProgress = null;
+        }
+    });
+
+    window.addEventListener('pageshow', function (event) {
+        navigationAborted = false;
+        if (!event.persisted || !document.querySelector('[data-elpis-deferred-load="1"]')) {
+            return;
+        }
+        runProgressAndNavigate(new URL(window.location.href), {
+            delayMs: 0,
+            history: 'deferred'
+        });
+    });
+
     if (sessionStorage.getItem('elpis_skip_loader')) {
         sessionStorage.removeItem('elpis_skip_loader');
         hideLoader();
 
         var cleanUrl = new URL(window.location.href);
-        if (cleanUrl.searchParams.has('_loaded')) {
-            cleanUrl.searchParams.delete('_loaded');
+        if (ElpisHistory.hasTransientParams(cleanUrl.searchParams)) {
+            ElpisHistory.stripTransientParams(cleanUrl.searchParams);
             window.history.replaceState({}, '', cleanUrl.pathname + cleanUrl.search);
         }
     }
@@ -1195,7 +1246,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
     if (deferredProjectsSection) {
         var deferredUrl = new URL(window.location.href);
         runProgressAndNavigate(deferredUrl, {
-            delayMs: DELAY_MS
+            delayMs: DELAY_MS,
+            history: 'deferred'
         });
     }
 })();
@@ -1214,6 +1266,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
     var loader = document.getElementById('elpis-loader');
     var currentProject = '';
     var currentLines = [];
+    var loadGeneration = 0;
     var numericSortKeys = { to_order: true, ordered: true, open: true, received: true, stock: true };
         var toneClass = { alert: 'elpis-row--alert', orange: 'elpis-row--orange', warn: 'elpis-row--warn', ok: 'elpis-row--ok' };
         var optClass = { alert: 'elpis-opt-alert', orange: 'elpis-opt-orange', warn: 'elpis-opt-warn', ok: 'elpis-opt-ok', muted: 'elpis-opt-muted' };
@@ -1239,18 +1292,17 @@ $projects = elpis_sort_projects_for_display($projects, []);
         return new URL(window.location.href).searchParams.get('project') || '';
     }
 
-    function syncProjectSearchToUrl() {
-        if (!searchInput) {
-            return;
+    function projectLabel(projectNo) {
+        var opener = null;
+        document.querySelectorAll('[data-elpis-open-project]').forEach(function (button) {
+            if (button.getAttribute('data-project-no') === projectNo) {
+                opener = button;
+            }
+        });
+        if (opener) {
+            return opener.getAttribute('data-project-label') || projectNo;
         }
-        var url = new URL(window.location.href);
-        var query = searchInput.value.trim();
-        if (query === '') {
-            url.searchParams.delete('q');
-        } else {
-            url.searchParams.set('q', query);
-        }
-        window.history.replaceState({}, '', url.pathname + url.search);
+        return projectNo;
     }
 
     function applyProjectFilters() {
@@ -1273,7 +1325,6 @@ $projects = elpis_sort_projects_for_display($projects, []);
         if (searchEmpty) {
             searchEmpty.classList.toggle('is-visible', tokens.length > 0 && visibleCount === 0);
         }
-        syncProjectSearchToUrl();
     }
 
     function copyProjectLink(button) {
@@ -1324,6 +1375,9 @@ $projects = elpis_sort_projects_for_display($projects, []);
             return;
         }
         var current = statusFilter.value;
+        if (current === '') {
+            current = statusFilter.getAttribute('data-desired-status') || '';
+        }
         statusFilter.innerHTML = '';
         var all = document.createElement('option');
         all.value = '';
@@ -1472,23 +1526,35 @@ $projects = elpis_sort_projects_for_display($projects, []);
         if (modal) {
             modal.hidden = false;
         }
-        var url = new URL(window.location.href);
-        url.searchParams.set('project', projectNo);
-        window.history.replaceState({}, '', url.pathname + url.search);
+        applyProjectFilters();
     }
 
-    function closeModal() {
+    function hideModal() {
+        loadGeneration += 1;
+        hideLoaderNow();
         if (modal) {
             modal.hidden = true;
         }
         currentProject = '';
-        var url = new URL(window.location.href);
-        url.searchParams.delete('project');
-        window.history.replaceState({}, '', url.pathname + url.search);
+        applyProjectFilters();
+    }
+
+    function captureLineFilters(view) {
+        var lineQuery = view && view.line_q ? view.line_q : '';
+        var lineStatus = view && view.line_status ? view.line_status : '';
+        if (lineSearch) {
+            lineSearch.value = lineQuery;
+        }
+        if (statusFilter) {
+            statusFilter.setAttribute('data-desired-status', lineStatus);
+            statusFilter.value = lineStatus;
+        }
     }
 
     function loadProject(projectNo, label, refresh) {
+        var generation = ++loadGeneration;
         openModal(projectNo, label);
+        captureLineFilters(projectHistory.current());
         showLoaderNow();
         var url = new URL('project_lines.php', window.location.href);
         var page = new URL(window.location.href);
@@ -1507,24 +1573,62 @@ $projects = elpis_sort_projects_for_display($projects, []);
             }
             return response.json();
         }).then(function (data) {
+            if (generation !== loadGeneration) {
+                return;
+            }
             currentLines = data.lines || [];
             renderStatusOptions(data.statuses || []);
             renderLines();
         }).catch(function () {
+            if (generation !== loadGeneration) {
+                return;
+            }
             if (modalBody) {
                 modalBody.innerHTML = '<p class="elpis-alert">' + esc(modal ? modal.getAttribute('data-load-failed') : '') + '</p>';
             }
-        }).finally(hideLoaderNow);
+        }).finally(function () {
+            if (generation !== loadGeneration) {
+                return;
+            }
+            hideLoaderNow();
+        });
     }
 
+    var projectHistory = ElpisHistory.createProjectHistory({
+        onListFilter: function (view) {
+            if (searchInput && searchInput.value !== view.q) {
+                searchInput.value = view.q;
+            }
+            applyProjectFilters();
+        },
+        onOpenProject: function (view) {
+            loadProject(view.project, projectLabel(view.project), false);
+        },
+        onCloseProject: function () {
+            hideModal();
+        },
+        onLineFilter: function (view) {
+            captureLineFilters(view);
+            if (statusFilter) {
+                paintStatusFilter();
+            }
+            renderLines();
+        }
+    });
+
     if (searchInput) {
-        searchInput.addEventListener('input', applyProjectFilters);
+        searchInput.addEventListener('input', function () {
+            applyProjectFilters();
+            projectHistory.setListQuery(searchInput.value);
+        });
     }
     applyProjectFilters();
+    projectHistory.seed();
+    projectHistory.install();
 
     document.querySelectorAll('[data-elpis-open-project]').forEach(function (button) {
         button.addEventListener('click', function () {
-            loadProject(button.getAttribute('data-project-no') || '', button.getAttribute('data-project-label') || '', false);
+            projectHistory.openProject(button.getAttribute('data-project-no') || '');
         });
     });
     document.querySelectorAll('[data-elpis-copy-link]').forEach(function (button) {
@@ -1535,12 +1639,17 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
     });
     if (lineSearch) {
-        lineSearch.addEventListener('input', renderLines);
+        lineSearch.addEventListener('input', function () {
+            renderLines();
+            projectHistory.setLineQuery(lineSearch.value);
+        });
     }
     if (statusFilter) {
         statusFilter.addEventListener('change', function () {
+            statusFilter.setAttribute('data-desired-status', statusFilter.value);
             paintStatusFilter();
             renderLines();
+            projectHistory.setStatus(statusFilter.value);
         });
     }
     if (refreshButton) {
@@ -1551,12 +1660,14 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
     }
     document.querySelectorAll('[data-elpis-modal-close]').forEach(function (button) {
-        button.addEventListener('click', closeModal);
+        button.addEventListener('click', function () {
+            projectHistory.closeProject();
+        });
     });
     if (modal) {
         modal.addEventListener('click', function (event) {
             if (event.target === modal) {
-                closeModal();
+                projectHistory.closeProject();
             }
         });
     }
