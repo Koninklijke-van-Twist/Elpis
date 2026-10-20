@@ -229,6 +229,42 @@ if (elpis_line_row_tone($receivedLine) === 'alert') {
     fail('een ontvangen regel is niet rood');
 }
 
+$siblings = elpis_apply_receipt_expectations([
+    'PRJ2606522' => [
+        planningLine(['remaining_qty' => 1, 'expected_receipt_date' => '2026-10-01']),
+        planningLine([
+            'line_no' => 50000,
+            'purchase_order_line_no' => 20000,
+            'remaining_qty' => 1,
+            'expected_receipt_date' => '2026-10-01',
+        ]),
+    ],
+], [], [], [], [
+    'receipts' => [[
+        'Job_No' => 'PRJ2606522',
+        'Job_Task_No' => '200-000-050',
+        'Item_No' => 'PI20002946',
+        'Posting_Date' => '2026-10-09',
+    ]],
+]);
+foreach ($siblings['PRJ2606522'] as $sibling) {
+    if (($sibling['receipt_state'] ?? '') === 'received') {
+        fail('een inkoopontvangst sluit niet elke regel met hetzelfde artikel: ' . json_encode($sibling));
+    }
+}
+
+$closed = elpis_apply_receipt_expectations(['P' => [planningLine([
+    'purchase_order_no' => '',
+    'purchase_order_line_no' => 0,
+    'expected_receipt_date' => '2026-10-01',
+    'remaining_qty' => 0,
+    'material_status' => 'I',
+])]], [], [], []);
+$closedLine = $closed['P'][0];
+if (($closedLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($closedLine) || elpis_mail_line_matches_content($closedLine, 'both')) {
+    fail('Remaining_Qty 0 is afgesloten en hoort niet in de mail: ' . json_encode($closedLine));
+}
+
 $unconfirmed = elpis_apply_receipt_expectations(['P' => [planningLine([
     'purchase_order_no' => '',
     'purchase_order_line_no' => 0,

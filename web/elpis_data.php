@@ -622,7 +622,9 @@ function elpis_line_is_received(array $line): bool
         return true;
     }
 
-    return elpis_normalize_bc_date((string) ($line['received_date'] ?? '')) !== '';
+    $remaining = elpis_line_remaining_qty($line);
+
+    return $remaining !== null && $remaining <= 0.00001;
 }
 
 function elpis_refresh_receipt_state(array $line): array
