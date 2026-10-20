@@ -52,30 +52,15 @@ $savedManagersByCompany = elpis_load_manager_prefs($userEmail);
 $companyReloaded = isset($_GET['reload_managers']);
 
 $companies = elpis_companies_for_page();
-$savedCompany = (string) ($userPrefs['elpis_company'] ?? '');
 $requestedCompany = trim((string) ($_GET['company'] ?? ''));
 $requestedManager = $companyReloaded ? '' : trim((string) ($_GET['manager'] ?? ''));
-$discoveredSelection = elpis_discover_selection_for_new_user(
-    $companies,
-    $userEmail,
-    $requestedCompany,
-    $requestedManager,
-    $savedCompany,
-    $savedManagersByCompany
-);
-$preselectedManager = null;
 
-if (is_array($discoveredSelection)) {
-    $company = (string) ($discoveredSelection['company'] ?? '');
-    if ($company === '' || !in_array($company, $companies, true)) {
-        $company = elpis_resolve_company_choice($companies, $requestedCompany, $savedCompany);
-    } else {
-        $preselectedManager = trim((string) ($discoveredSelection['manager'] ?? ''));
-    }
-} else {
-    $company = elpis_resolve_company_choice($companies, $requestedCompany, $savedCompany);
+if ($requestedCompany === '' || !in_array($requestedCompany, $companies, true)) {
+    elpis_progress_emit(['complete' => true]);
+    exit;
 }
 
+$company = $requestedCompany;
 $projectManager = '';
 
 try {
@@ -84,27 +69,13 @@ try {
 
     elpis_progress_emit(['step' => 'managers', 'status' => 'start']);
     $projectManagers = elpis_fetch_project_managers($company);
-
-    if ($preselectedManager !== null && $preselectedManager !== '') {
-        $projectManager = elpis_pick_manager_from_list($projectManagers, $preselectedManager);
-        if ($projectManager === '') {
-            $projectManager = elpis_resolve_manager_choice(
-                $projectManagers,
-                $requestedManager,
-                $company,
-                $savedManagersByCompany,
-                $userEmail
-            );
-        }
-    } else {
-        $projectManager = elpis_resolve_manager_choice(
-            $projectManagers,
-            $requestedManager,
-            $company,
-            $savedManagersByCompany,
-            $userEmail
-        );
-    }
+    $projectManager = elpis_resolve_manager_choice(
+        $projectManagers,
+        $requestedManager,
+        $company,
+        $savedManagersByCompany,
+        $userEmail
+    );
 
     elpis_progress_emit(['step' => 'managers', 'status' => 'done']);
 
@@ -120,15 +91,6 @@ try {
     elpis_progress_emit(['step' => 'projects', 'status' => 'start']);
     $projects = elpis_fetch_projects_for_manager($company, $projectManager);
     elpis_progress_emit(['step' => 'projects', 'status' => 'done']);
-
-    elpis_load_shown_lines(
-        $company,
-        elpis_project_nos_from_projects($projects),
-        ELPI_CACHE_TTL,
-        static function (array $event): void {
-            elpis_progress_emit($event);
-        }
-    );
 
     if ($company !== '') {
         elpis_save_dropdown_prefs($userEmail, $company, $projectManager);

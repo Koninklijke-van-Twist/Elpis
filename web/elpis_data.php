@@ -44,15 +44,21 @@ const ELPI_ITEM_LINE_TYPE = 'Artikel';
 
 /**
  * Gepubliceerde entity sets (geverifieerd in KVT BC).
- * WerkordersLines: alle artikelregels van de projectplanning.
- * AppProjectInkoopPlanningsRegel: verrijking met KVT_Expected_Receipt_Date waar de inkooppagina de regel heeft.
- * ReservationEntries: sleutel Entry_No + Positive. PurchaseOrderLines: Ratatoskr. ItemList: Inventory.
+ * PurchaseOrderLines en ItemList bestaan niet (404).
+ * PurchaseLines: Document_Type eq 'Order'. AppItems.InventoryField: voorraad.
+ * WerkordersLines: artikelregels, KVT_Expected_Receipt_Date, Planning_Date, LVS_Work_Order_No.
  */
 const ELPI_PLANNING_LINE_ENTITY = 'WerkordersLines';
 const ELPI_INKOOP_PLANNING_ENTITY = 'AppProjectInkoopPlanningsRegel';
 const ELPI_RESERVATION_ENTRY_ENTITY = 'ReservationEntries';
-const ELPI_PURCHASE_ORDER_LINE_ENTITY = 'PurchaseOrderLines';
-const ELPI_ITEM_LIST_ENTITY = 'ItemList';
+const ELPI_PURCHASE_ORDER_LINE_ENTITY = 'PurchaseLines';
+const ELPI_ITEM_LIST_ENTITY = 'AppItems';
+const ELPI_ITEM_LEDGER_ENTITY = 'ItemLedgerEntries';
+const ELPI_WORK_ORDER_ENTITY = 'AppWerkorders';
+const ELPI_USER_SETUP_ENTITY = 'AppUserSetup';
+const ELPI_USERS_ENTITY = 'Users';
+/** Eigen status in het regelfilter, naast KVT_Status_Material. */
+const ELPI_STATUS_LATE = 'LATE';
 
 /**
  * Functies
@@ -98,7 +104,9 @@ function elpis_fetch_memo_key(string $company, string $entitySet, array $query, 
 {
     ksort($query);
 
-    return elpis_fetch_memo_scope() . "\0" . $ttl . "\0" . $company . "\0" . $entitySet . "\0" . json_encode($query, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $live = !empty($GLOBALS['ELPIS_LIVE_FETCH']) ? 'live' : 'cache';
+
+    return elpis_fetch_memo_scope() . "\0" . $ttl . "\0" . $live . "\0" . $company . "\0" . $entitySet . "\0" . json_encode($query, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 }
 
 function elpis_log_timing(string $company, string $entitySet, array $query, int $rowCount, float $startedAt, string $cache): void
@@ -211,7 +219,8 @@ function elpis_fetch_rows(string $company, string $entitySet, array $query, int 
     }
 
     if (odata_mimir_enabled()) {
-        $ttlForMimir = $ttl === 0 ? 3600 : $ttl;
+        // Ververs-nu zet max_age op 0. Een gewone ttl 0 blijft 1 uur, zoals odata_get_all.
+        $ttlForMimir = !empty($GLOBALS['ELPIS_LIVE_FETCH']) ? 0 : ($ttl === 0 ? 3600 : $ttl);
         $rows = odata_mimir_or_direct(
             static function () use ($company, $entitySet, $query, $ttlForMimir): array {
                 return odata_mimir_query_impl($company, $entitySet, $query, $ttlForMimir);
@@ -249,6 +258,13 @@ function elpis_fetch_rows_direct(string $company, string $entitySet, array $quer
         $root = is_string($alt) ? $alt : '';
     }
     $url = elpis_company_entity_url($root, $environment, $company, $entitySet, $query);
+
+    if (!empty($GLOBALS['ELPIS_LIVE_FETCH']) && function_exists('build_cache_key') && function_exists('cache_path_for_key')) {
+        $cachePath = cache_path_for_key(build_cache_key($url, is_array($auth) ? $auth : []));
+        if (is_file($cachePath)) {
+            @unlink($cachePath);
+        }
+    }
 
     // Bij een open Mímir-circuit direct de oude OData-client, anders opnieuw Mímir in.
     if (odata_mimir_enabled() && function_exists('odata_get_all_direct')) {
@@ -574,8 +590,80 @@ function elpis_line_remaining_qty(array $line): ?float
     return (float) $line['remaining_qty'];
 }
 
+function elpis_today(): string
+{
+    $override = $GLOBALS['ELPIS_TODAY'] ?? null;
+    if (is_string($override) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $override) === 1) {
+        return $override;
+    }
+
+    return (new DateTimeImmutable('now', new DateTimeZone('Europe/Amsterdam')))->format('Y-m-d');
+}
+
+function elpis_line_is_not_required(array $line): bool
+{
+    return strtoupper(trim((string) ($line['material_status'] ?? ''))) === 'N';
+}
+
+function elpis_line_is_received(array $line): bool
+{
+    if (!empty($line['completely_received']) || !empty($line['completely_picked'])) {
+        return true;
+    }
+
+    $quantity = (float) ($line['quantity'] ?? 0);
+    $picked = (float) ($line['kvt_qty_picked'] ?? 0);
+    if ($quantity > 0.00001 && $picked + 0.00001 >= $quantity) {
+        return true;
+    }
+
+    $status = strtoupper(trim((string) ($line['material_status'] ?? '')));
+    if (in_array($status, ['G', 'B', 'A', 'C'], true)) {
+        return true;
+    }
+
+    return elpis_normalize_bc_date((string) ($line['received_date'] ?? '')) !== '';
+}
+
+function elpis_refresh_receipt_state(array $line): array
+{
+    if (elpis_line_is_received($line)) {
+        $line['receipt_state'] = 'received';
+    } elseif (elpis_line_is_not_required($line)) {
+        $line['receipt_state'] = 'not_required';
+    } elseif (elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? '')) === '') {
+        $line['receipt_state'] = 'unconfirmed';
+    } elseif (elpis_line_is_late($line)) {
+        $line['receipt_state'] = 'late';
+    } else {
+        $line['receipt_state'] = 'date';
+    }
+
+    return $line;
+}
+
+function elpis_line_is_late(array $line, ?string $today = null): bool
+{
+    if (elpis_line_is_received($line) || elpis_line_is_not_required($line)) {
+        return false;
+    }
+
+    $date = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
+    if ($date === '') {
+        return false;
+    }
+
+    $today = $today ?? elpis_today();
+
+    return substr($date, 0, 10) < $today;
+}
+
 function elpis_line_still_expecting_receipt(array $line): bool
 {
+    if (elpis_line_is_received($line) || elpis_line_is_not_required($line)) {
+        return false;
+    }
+
     $remaining = elpis_line_remaining_qty($line);
     if ($remaining !== null) {
         return $remaining > 0.00001;
@@ -600,49 +688,31 @@ function elpis_line_still_expecting_receipt(array $line): bool
 
 function elpis_line_expected_receipt_display(array $line): string
 {
-    if (!elpis_line_still_expecting_receipt($line)) {
-        return '';
-    }
-
+    $line = elpis_refresh_receipt_state($line);
     $state = (string) ($line['receipt_state'] ?? '');
+    if ($state === 'received' || ($state === '' && elpis_line_is_received($line))) {
+        $date = elpis_format_display_date((string) ($line['received_date'] ?? ''));
+        if ($date !== '') {
+            return LOC('elpis.receipt.already', $date);
+        }
+
+        return LOC('elpis.receipt.already_nodate');
+    }
+
+    if ($state === 'not_required') {
+        return LOC('elpis.material_status.N');
+    }
+
+    if ($state === 'late' || ($state === '' && elpis_line_is_late($line))) {
+        return LOC('elpis.receipt.late');
+    }
+
     $date = elpis_format_display_date((string) ($line['expected_receipt_date'] ?? ''));
-
-    if ($state === 'on_stock') {
-        return LOC('elpis.receipt.on_stock');
-    }
-
-    if ($state === 'partial') {
-        if ($date !== '') {
-            return LOC('elpis.receipt.partial', $date);
-        }
-
-        return LOC('elpis.receipt.partial_missing');
-    }
-
-    if ($state === 'uncovered') {
-        $stock = (float) ($line['covered_by_stock'] ?? 0);
-        if ($date !== '' && $stock > 0.00001) {
-            return LOC('elpis.receipt.partial_uncovered', $date);
-        }
-        if ($date !== '') {
-            return LOC('elpis.receipt.uncovered', $date);
-        }
-        if ($stock > 0.00001) {
-            return LOC('elpis.receipt.partial_missing');
-        }
-
-        return LOC('elpis.receipt.missing');
-    }
-
-    if ($state === 'missing') {
-        return LOC('elpis.receipt.missing');
-    }
-
     if ($date !== '') {
         return $date;
     }
 
-    if ($state === 'date') {
+    if ($state === 'unconfirmed' || $state === 'missing') {
         return LOC('elpis.receipt.missing');
     }
 
@@ -652,11 +722,8 @@ function elpis_line_expected_receipt_display(array $line): string
 function elpis_receipt_sort_value(array $line): string
 {
     $state = (string) ($line['receipt_state'] ?? '');
-    if ($state === 'on_stock') {
+    if ($state === 'received' || $state === 'not_required') {
         return '0000-00-00';
-    }
-    if ($state === 'missing' || $state === 'uncovered') {
-        return '9999-99-99';
     }
 
     $date = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
@@ -664,7 +731,7 @@ function elpis_receipt_sort_value(array $line): string
         return substr($date, 0, 10);
     }
 
-    return $state === 'partial' ? '9999-99-99' : '';
+    return '9999-99-99';
 }
 
 function elpis_line_quantities(float $quantity, string $purchaseOrderNo, float $orderedQty, float $outstanding): array
@@ -706,18 +773,28 @@ function elpis_normalize_planning_line_row(array $row): array
         (float) ($row['LVS_Outstanding_Qty_Base'] ?? 0)
     );
     $materialStatus = strtoupper(trim((string) ($row['KVT_Status_Material'] ?? '')));
+    $planning = elpis_planning_date_from_row($row);
 
     return array_merge($quantities, [
         'job_task_no' => trim((string) ($row['Job_Task_No'] ?? '')),
         'job_contract_entry_no' => (int) ($row['Job_Contract_Entry_No'] ?? 0),
+        'work_order_no' => trim((string) ($row['LVS_Work_Order_No'] ?? '')),
         'item_no' => trim((string) ($row['No'] ?? '')),
         'description' => trim((string) ($row['Description'] ?? '')),
         'quantity' => $quantity,
         'remaining_qty' => $remainingQty,
         'reserved_quantity' => $reservedQuantity,
         'purchase_order_no' => $purchaseOrderNo,
+        'purchase_order_line_no' => (int) ($row['LVS_Purchase_Order_Line_No'] ?? 0),
         'completely_received' => elpis_bc_bool($row['LVS_Completely_Received'] ?? false),
+        'completely_picked' => elpis_bc_bool($row['KVT_Completely_Picked'] ?? false),
+        'kvt_qty_picked' => (float) ($row['KVT_Qty_Picked'] ?? 0),
+        'planning_date' => $planning['date'],
+        'planning_date_field' => $planning['field'],
         'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['KVT_Expected_Receipt_Date'] ?? '')),
+        'expected_receipt_source' => '',
+        'received_date' => '',
+        'free_stock' => null,
         'receipt_state' => '',
         'covered_by_stock' => 0.0,
         'material_status' => $materialStatus,
@@ -726,6 +803,21 @@ function elpis_normalize_planning_line_row(array $row): array
             : '',
         'line_no' => (int) ($row['Line_No'] ?? 0),
     ]);
+}
+
+function elpis_planning_date_from_row(array $row): array
+{
+    $planning = elpis_normalize_bc_date((string) ($row['Planning_Date'] ?? ''));
+    if ($planning !== '') {
+        return ['date' => substr($planning, 0, 10), 'field' => 'Planning_Date'];
+    }
+
+    $plannedDelivery = elpis_normalize_bc_date((string) ($row['Planned_Delivery_Date'] ?? ''));
+    if ($plannedDelivery !== '') {
+        return ['date' => substr($plannedDelivery, 0, 10), 'field' => 'Planned_Delivery_Date'];
+    }
+
+    return ['date' => '', 'field' => 'Planning_Date'];
 }
 
 function elpis_fetch_project_managers(string $company, int $ttl = ELPI_PROJECT_MANAGERS_TTL): array
@@ -849,12 +941,12 @@ function elpis_project_nos_from_projects(array $projects): array
 
 function elpis_werkorders_line_select_fields(): string
 {
-    return 'Job_No,Job_Task_No,Line_No,Job_Contract_Entry_No,Type,No,Description,Quantity,Remaining_Qty,Reserved_Quantity';
+    return 'Job_No,Job_Task_No,Line_No,Job_Contract_Entry_No,Type,No,Description,Quantity,Remaining_Qty,Reserved_Quantity,KVT_Expected_Receipt_Date,Planning_Date,Planned_Delivery_Date,LVS_Work_Order_No,LVS_Purchase_Order_No,LVS_Purchase_Order_Line_No,KVT_Status_Material,KVT_Qty_Picked,KVT_Completely_Picked';
 }
 
 function elpis_inkoop_planning_select_fields(): string
 {
-    return 'Job_No,Job_Task_No,Line_No,Job_Contract_Entry_No,No,KVT_Expected_Receipt_Date,Reserved_Quantity,LVS_Purchase_Order_No,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Completely_Received,KVT_Status_Material';
+    return 'Job_No,Job_Task_No,Line_No,Job_Contract_Entry_No,No,KVT_Expected_Receipt_Date,Planning_Date,Planned_Delivery_Date,Reserved_Quantity,LVS_Purchase_Order_No,LVS_Purchase_Order_Line_No,LVS_Work_Order_No,LVS_Quantity_Order_UoM,LVS_Outstanding_Qty_Base,LVS_Completely_Received,KVT_Status_Material,KVT_Qty_Picked,KVT_Completely_Picked';
 }
 
 function elpis_planning_line_select_fields(): string
@@ -1118,8 +1210,30 @@ function elpis_merge_inkoop_planning_line(array $line, array $inkoopRow): array
         $line['quantity'] = $quantity;
     }
 
+    $purchaseOrderLineNo = (int) ($inkoopRow['LVS_Purchase_Order_Line_No'] ?? 0);
+    if ($purchaseOrderLineNo > 0 && (int) ($line['purchase_order_line_no'] ?? 0) <= 0) {
+        $line['purchase_order_line_no'] = $purchaseOrderLineNo;
+    }
+
+    $workOrderNo = trim((string) ($inkoopRow['LVS_Work_Order_No'] ?? ''));
+    if ($workOrderNo !== '' && trim((string) ($line['work_order_no'] ?? '')) === '') {
+        $line['work_order_no'] = $workOrderNo;
+    }
+
+    if (trim((string) ($line['planning_date'] ?? '')) === '') {
+        $planning = elpis_planning_date_from_row($inkoopRow);
+        $line['planning_date'] = $planning['date'];
+        $line['planning_date_field'] = $planning['field'];
+    }
+
+    $picked = (float) ($inkoopRow['KVT_Qty_Picked'] ?? 0);
+    if ($picked > (float) ($line['kvt_qty_picked'] ?? 0)) {
+        $line['kvt_qty_picked'] = $picked;
+    }
+    $line['completely_picked'] = !empty($line['completely_picked']) || elpis_bc_bool($inkoopRow['KVT_Completely_Picked'] ?? false);
+
     $kvtDate = elpis_normalize_bc_date((string) ($inkoopRow['KVT_Expected_Receipt_Date'] ?? ''));
-    if ($kvtDate !== '') {
+    if ($kvtDate !== '' && elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? '')) === '') {
         $line['expected_receipt_date'] = substr($kvtDate, 0, 10);
     }
 
@@ -1173,12 +1287,12 @@ function elpis_reservation_status_matches(string $status): bool
 
 function elpis_purchase_line_select_fields(): string
 {
-    return 'Document_No,Line_No,No,Type,Expected_Receipt_Date,Promised_Receipt_Date,Planned_Receipt_Date,Outstanding_Quantity';
+    return 'Document_No,Line_No,No,Document_Type,Expected_Receipt_Date,Promised_Receipt_Date,Planned_Receipt_Date,LVS_Completely_Received';
 }
 
 function elpis_purchase_line_open_filter(): string
 {
-    return 'Outstanding_Quantity gt 0';
+    return "Document_Type eq 'Order'";
 }
 
 function elpis_reservation_demand_filter(array $projectNos): string
@@ -1202,12 +1316,39 @@ function elpis_reservation_supply_filter(array $entryNos): string
     ]);
 }
 
+/**
+ * Source_Types die vrije voorraad verlagen.
+ * Bevestigd: 1003 (projectplanningsregel). Werkorder-reserveringen zijn nog
+ * niet bevestigd; extra ints in $GLOBALS['ELPIS_STOCK_RESERVATION_SOURCE_TYPES']
+ * krijgen hetzelfde filter (Reservation, Positive eq false, ander project).
+ *
+ * @return list<int>
+ */
+function elpis_stock_reservation_source_types(): array
+{
+    $types = [ELPI_JOB_PLANNING_SOURCE_TYPE];
+    $extra = $GLOBALS['ELPIS_STOCK_RESERVATION_SOURCE_TYPES'] ?? [];
+    if (is_array($extra)) {
+        foreach ($extra as $type) {
+            $type = (int) $type;
+            if ($type > 0) {
+                $types[] = $type;
+            }
+        }
+    }
+
+    $types = array_values(array_unique($types));
+    sort($types, SORT_NUMERIC);
+
+    return $types;
+}
+
 function elpis_item_stock_reservation_filter(array $itemNos): string
 {
     return elpis_and_filters([
         elpis_reservation_status_filter(),
-        'Positive eq true',
-        'Source_Type eq ' . ELPI_ITEM_LEDGER_SOURCE_TYPE,
+        'Positive eq false',
+        elpis_odata_eq_list('Source_Type', elpis_stock_reservation_source_types(), true),
         elpis_odata_eq_list('Item_No', $itemNos),
     ]);
 }
@@ -1216,16 +1357,29 @@ function elpis_purchase_documents_filter(array $documentNos): string
 {
     return elpis_and_filters([
         elpis_purchase_line_open_filter(),
-        elpis_planning_line_type_filter(),
         elpis_odata_eq_list('Document_No', $documentNos),
     ]);
 }
 
+function elpis_item_ledger_filter(array $projectNos): string
+{
+    return elpis_and_filters([
+        "Entry_Type eq 'Purchase'",
+        "Document_Type eq 'Purchase Receipt'",
+        elpis_odata_eq_list('Job_No', $projectNos),
+    ]);
+}
+
+function elpis_item_ledger_select_fields(): string
+{
+    return 'Item_No,Job_No,Job_Task_No,Posting_Date,Entry_Type,Document_Type';
+}
+
 function elpis_item_inventory_select_fields(): string
 {
-    // ItemList.Inventory is de artikelvoorraad over alle locaties. Geen Location_Code,
-    // zodat reserveringen en voorraad dezelfde scope houden.
-    return 'No,Inventory';
+    // AppItems.InventoryField is de artikelvoorraad. Geen Location_Code:
+    // de aftrek van reserveringen geldt voor dezelfde artikelbrede voorraad.
+    return 'No,InventoryField';
 }
 
 function elpis_receipt_filters_are_department_independent(string $filter): bool
@@ -1266,6 +1420,7 @@ function elpis_normalize_purchase_order_line(array $row): array
         'promised_receipt_date' => elpis_normalize_bc_date((string) ($row['Promised_Receipt_Date'] ?? '')),
         'planned_receipt_date' => elpis_normalize_bc_date((string) ($row['Planned_Receipt_Date'] ?? '')),
         'outstanding_qty' => (float) ($row['Outstanding_Quantity'] ?? 0),
+        'completely_received' => elpis_bc_bool($row['LVS_Completely_Received'] ?? false),
     ];
 }
 
@@ -1371,6 +1526,15 @@ function elpis_reservation_is_purchase_supply(array $entry): bool
     }
 
     return (int) ($entry['source_type'] ?? 0) === ELPI_PURCHASE_LINE_SOURCE_TYPE;
+}
+
+function elpis_reservation_is_stock_demand(array $entry): bool
+{
+    if (!elpis_reservation_is_active($entry) || ($entry['positive'] ?? null) !== false) {
+        return false;
+    }
+
+    return in_array((int) ($entry['source_type'] ?? 0), elpis_stock_reservation_source_types(), true);
 }
 
 function elpis_fetch_reservation_entries(string $company, int $ttl = ELPI_CACHE_TTL): array
@@ -1571,7 +1735,10 @@ function elpis_fetch_item_inventory(string $company, array $itemNos, int $ttl = 
             if ($no === '') {
                 continue;
             }
-            $map[$no] = (float) ($row['Inventory'] ?? 0);
+            if (!array_key_exists('InventoryField', $row) || $row['InventoryField'] === '' || $row['InventoryField'] === null) {
+                continue;
+            }
+            $map[$no] = (float) $row['InventoryField'];
         }
         $doneChunks++;
         if ($onChunk !== null) {
@@ -1634,7 +1801,7 @@ function elpis_fetch_item_stock_reservations(string $company, array $itemNos, in
                 continue;
             }
             $normalized = elpis_normalize_reservation_entry($row);
-            if ($normalized['entry_no'] > 0 && elpis_reservation_is_stock_supply($normalized)) {
+            if ($normalized['entry_no'] > 0 && elpis_reservation_is_stock_demand($normalized)) {
                 $entries[] = $normalized;
             }
         }
@@ -1660,7 +1827,7 @@ function elpis_collect_stock_item_nos(array $linesByProject): array
             continue;
         }
         foreach ($lines as $line) {
-            if (!is_array($line) || !elpis_line_needs_receipt_lookup($line)) {
+            if (!is_array($line)) {
                 continue;
             }
             $itemNo = trim((string) ($line['item_no'] ?? ''));
@@ -1671,6 +1838,27 @@ function elpis_collect_stock_item_nos(array $linesByProject): array
     }
 
     return elpis_sort_odata_values(array_keys($items));
+}
+
+function elpis_collect_work_order_nos(array $linesByProject): array
+{
+    $numbers = [];
+    foreach ($linesByProject as $lines) {
+        if (!is_array($lines)) {
+            continue;
+        }
+        foreach ($lines as $line) {
+            if (!is_array($line)) {
+                continue;
+            }
+            $number = trim((string) ($line['work_order_no'] ?? ''));
+            if ($number !== '') {
+                $numbers[$number] = true;
+            }
+        }
+    }
+
+    return elpis_sort_odata_values(array_keys($numbers));
 }
 
 function elpis_projects_needing_reservations(array $linesByProject): array
@@ -1692,7 +1880,7 @@ function elpis_projects_needing_reservations(array $linesByProject): array
     return elpis_sort_odata_values(elpis_normalize_project_nos($projectNos));
 }
 
-function elpis_collect_purchase_document_nos(array $linesByProject, array $reservations): array
+function elpis_collect_purchase_document_nos(array $linesByProject, array $reservations = []): array
 {
     $documents = [];
     foreach ($linesByProject as $lines) {
@@ -1700,7 +1888,7 @@ function elpis_collect_purchase_document_nos(array $linesByProject, array $reser
             continue;
         }
         foreach ($lines as $line) {
-            if (!is_array($line) || !elpis_line_needs_receipt_lookup($line)) {
+            if (!is_array($line)) {
                 continue;
             }
             $documentNo = trim((string) ($line['purchase_order_no'] ?? ''));
@@ -1710,20 +1898,91 @@ function elpis_collect_purchase_document_nos(array $linesByProject, array $reser
         }
     }
 
-    foreach ($reservations as $entry) {
-        if (!is_array($entry) || !elpis_reservation_is_purchase_supply($entry)) {
-            continue;
-        }
-        if (elpis_normalize_bc_date((string) ($entry['expected_receipt_date'] ?? '')) !== '') {
-            continue;
-        }
-        $documentNo = trim((string) ($entry['source_id'] ?? ''));
-        if ($documentNo !== '') {
-            $documents[$documentNo] = true;
+    return elpis_sort_odata_values(array_keys($documents));
+}
+
+function elpis_fetch_item_ledger_receipts(string $company, array $projectNos, int $ttl = ELPI_CACHE_TTL): array
+{
+    $company = trim($company);
+    $projectNos = elpis_sort_odata_values(elpis_normalize_project_nos($projectNos));
+    if ($company === '' || $projectNos === []) {
+        elpis_log_timing($company, ELPI_ITEM_LEDGER_ENTITY, [], 0, microtime(true), 'skipped');
+
+        return [];
+    }
+
+    $rowsOut = [];
+    foreach (array_chunk($projectNos, ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
+        $rows = elpis_try_fetch_rows($company, ELPI_ITEM_LEDGER_ENTITY, [
+            '$select' => elpis_item_ledger_select_fields(),
+            '$filter' => elpis_item_ledger_filter($chunk),
+        ], $ttl);
+        foreach ($rows as $row) {
+            if (is_array($row)) {
+                $rowsOut[] = $row;
+            }
         }
     }
 
-    return elpis_sort_odata_values(array_keys($documents));
+    return $rowsOut;
+}
+
+function elpis_fetch_work_orders(string $company, array $workOrderNos, int $ttl = ELPI_CACHE_TTL): array
+{
+    $company = trim($company);
+    $workOrderNos = elpis_sort_odata_values(elpis_normalize_project_nos($workOrderNos));
+    if ($company === '' || $workOrderNos === []) {
+        elpis_log_timing($company, ELPI_WORK_ORDER_ENTITY, [], 0, microtime(true), 'skipped');
+
+        return [];
+    }
+
+    $map = [];
+    foreach (array_chunk($workOrderNos, ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
+        $rows = elpis_try_fetch_rows($company, ELPI_WORK_ORDER_ENTITY, [
+            '$select' => 'No,Description',
+            '$filter' => elpis_odata_eq_list('No', $chunk),
+        ], $ttl);
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $no = trim((string) ($row['No'] ?? ''));
+            if ($no === '') {
+                continue;
+            }
+            $map[strtoupper($no)] = [
+                'no' => $no,
+                'description' => trim((string) ($row['Description'] ?? '')),
+            ];
+        }
+    }
+
+    return $map;
+}
+
+function elpis_receipt_posting_index(array $rows): array
+{
+    $map = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $job = strtoupper(trim((string) ($row['Job_No'] ?? $row['job_no'] ?? '')));
+        $task = strtoupper(trim((string) ($row['Job_Task_No'] ?? $row['job_task_no'] ?? '')));
+        $item = strtoupper(trim((string) ($row['Item_No'] ?? $row['item_no'] ?? '')));
+        $date = elpis_normalize_bc_date((string) ($row['Posting_Date'] ?? $row['posting_date'] ?? ''));
+        if ($job === '' || $item === '' || $date === '') {
+            continue;
+        }
+        $date = substr($date, 0, 10);
+        $key = $job . '|' . $task . '|' . $item;
+        if (!isset($map[$key]) || $date > $map[$key]) {
+            $map[$key] = $date;
+        }
+    }
+
+    return $map;
 }
 
 function elpis_load_receipt_context(string $company, array $linesByProject, int $ttl = ELPI_CACHE_TTL, ?callable $onInventoryChunk = null, ?callable $onPhase = null): array
@@ -1732,6 +1991,8 @@ function elpis_load_receipt_context(string $company, array $linesByProject, int 
         'reservations' => [],
         'purchase_lines' => [],
         'inventory' => [],
+        'receipts' => [],
+        'work_orders' => [],
     ];
     $company = trim($company);
     if ($company === '') {
@@ -1746,31 +2007,26 @@ function elpis_load_receipt_context(string $company, array $linesByProject, int 
     };
 
     $startedAt = microtime(true);
+    $itemNos = elpis_collect_stock_item_nos($linesByProject);
+    $projectNos = elpis_sort_odata_values(elpis_normalize_project_nos(array_map('strval', array_keys($linesByProject))));
+
     $emit('reservations', 'start');
-    $reservations = elpis_merge_reservations(
-        elpis_fetch_reservation_entries_for_projects(
-            $company,
-            elpis_projects_needing_reservations($linesByProject),
-            $ttl
-        ),
-        elpis_fetch_item_stock_reservations($company, elpis_collect_stock_item_nos($linesByProject), $ttl)
-    );
+    $reservations = elpis_fetch_item_stock_reservations($company, $itemNos, $ttl);
     $emit('reservations', 'done');
 
     $emit('purchase', 'start');
     $purchaseLines = elpis_fetch_open_purchase_order_lines_for_documents(
         $company,
-        elpis_collect_purchase_document_nos($linesByProject, $reservations),
+        elpis_collect_purchase_document_nos($linesByProject),
         $ttl
     );
     $emit('purchase', 'done');
 
-    $inventoryItems = elpis_collect_stock_item_nos($linesByProject);
-    $inventoryChunks = elpis_item_inventory_chunk_count($inventoryItems);
+    $inventoryChunks = elpis_item_inventory_chunk_count($itemNos);
     $emit('inventory', 'start', ['done' => 0, 'total' => $inventoryChunks]);
     $inventory = elpis_fetch_item_inventory(
         $company,
-        $inventoryItems,
+        $itemNos,
         $ttl,
         static function (int $done, int $total) use ($emit, $onInventoryChunk): void {
             if ($onInventoryChunk !== null) {
@@ -1780,6 +2036,12 @@ function elpis_load_receipt_context(string $company, array $linesByProject, int 
         }
     );
     $emit('inventory', 'done', ['done' => $inventoryChunks, 'total' => $inventoryChunks]);
+
+    $emit('receipts', 'start');
+    $receipts = elpis_fetch_item_ledger_receipts($company, $projectNos, $ttl);
+    $emit('receipts', 'done');
+
+    $workOrders = elpis_fetch_work_orders($company, elpis_collect_work_order_nos($linesByProject), $ttl);
     elpis_log_timing(
         $company,
         'receipt-context',
@@ -1793,6 +2055,8 @@ function elpis_load_receipt_context(string $company, array $linesByProject, int 
         'reservations' => $reservations,
         'purchase_lines' => $purchaseLines,
         'inventory' => $inventory,
+        'receipts' => $receipts,
+        'work_orders' => $workOrders,
     ];
 }
 
@@ -1909,10 +2173,11 @@ function elpis_prepare_reservation_indexes(array $reservations): array
     return [$byEntry, $demandByJobContract, $stockReservedByItem];
 }
 
-function elpis_apply_receipt_expectations(array $linesByProject, array $reservations, array $purchaseLines, array $inventoryByItem): array
+function elpis_apply_receipt_expectations(array $linesByProject, array $reservations, array $purchaseLines, array $inventoryByItem, array $extras = []): array
 {
-    [$byDocLine, $byDocItem] = elpis_index_purchase_lines($purchaseLines);
-    [$byEntry, $demandByJobContract, $stockReservedByItem] = elpis_prepare_reservation_indexes($reservations);
+    [$byDocLine] = elpis_index_purchase_lines($purchaseLines);
+    $postingDates = elpis_receipt_posting_index(is_array($extras['receipts'] ?? null) ? $extras['receipts'] : []);
+    $workOrders = is_array($extras['work_orders'] ?? null) ? $extras['work_orders'] : [];
 
     $inventoryKnown = [];
     foreach ($inventoryByItem as $itemNo => $qty) {
@@ -1923,144 +2188,119 @@ function elpis_apply_receipt_expectations(array $linesByProject, array $reservat
         $inventoryKnown[$key] = (float) $qty;
     }
 
-    $free = [];
-    foreach ($inventoryKnown as $itemKey => $qty) {
-        $free[$itemKey] = max(0.0, $qty - (float) ($stockReservedByItem[$itemKey] ?? 0));
+    $reservedTotal = [];
+    $reservedOwn = [];
+    foreach ($reservations as $entry) {
+        if (!is_array($entry)) {
+            continue;
+        }
+        if (!isset($entry['entry_no']) && isset($entry['Entry_No'])) {
+            $entry = elpis_normalize_reservation_entry($entry);
+        }
+        if (!elpis_reservation_is_stock_demand($entry)) {
+            continue;
+        }
+        $itemKey = strtoupper(trim((string) ($entry['item_no'] ?? '')));
+        if ($itemKey === '') {
+            continue;
+        }
+        $qty = elpis_reservation_qty($entry);
+        if ($qty <= 0.00001) {
+            continue;
+        }
+        $reservedTotal[$itemKey] = ($reservedTotal[$itemKey] ?? 0.0) + $qty;
+        $source = strtoupper(trim((string) ($entry['source_id'] ?? '')));
+        if ($source !== '') {
+            $ownKey = $itemKey . '|' . $source;
+            $reservedOwn[$ownKey] = ($reservedOwn[$ownKey] ?? 0.0) + $qty;
+        }
     }
 
-    $order = [];
     foreach ($linesByProject as $projectNo => $lines) {
         if (!is_array($lines)) {
             continue;
         }
+        $projectKey = strtoupper(trim((string) $projectNo));
         foreach ($lines as $index => $line) {
             if (!is_array($line)) {
                 continue;
             }
-            $order[] = [
-                'project' => (string) $projectNo,
-                'index' => $index,
-                'task' => (string) ($line['job_task_no'] ?? ''),
-                'line_no' => (int) ($line['line_no'] ?? 0),
-            ];
+            $linesByProject[$projectNo][$index] = elpis_finalize_line(
+                $line,
+                $projectKey,
+                $byDocLine,
+                $postingDates,
+                $workOrders,
+                $inventoryKnown,
+                $reservedTotal,
+                $reservedOwn
+            );
         }
-    }
-
-    usort($order, static function (array $left, array $right): int {
-        $projectCompare = strnatcasecmp($left['project'], $right['project']);
-        if ($projectCompare !== 0) {
-            return $projectCompare;
-        }
-        $taskCompare = strnatcasecmp($left['task'], $right['task']);
-        if ($taskCompare !== 0) {
-            return $taskCompare;
-        }
-        if ($left['line_no'] !== $right['line_no']) {
-            return $left['line_no'] <=> $right['line_no'];
-        }
-
-        return $left['index'] <=> $right['index'];
-    });
-
-    foreach ($order as $ref) {
-        $line = $linesByProject[$ref['project']][$ref['index']];
-
-        if (!elpis_line_still_expecting_receipt($line)) {
-            $line['receipt_state'] = 'received';
-            $line['covered_by_stock'] = 0.0;
-            $linesByProject[$ref['project']][$ref['index']] = $line;
-            continue;
-        }
-
-        $bcDate = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
-        $bcDate = $bcDate === '' ? '' : substr($bcDate, 0, 10);
-        if ($bcDate !== '') {
-            $line['expected_receipt_date'] = $bcDate;
-            $line['receipt_state'] = 'date';
-            $line['covered_by_stock'] = 0.0;
-            $linesByProject[$ref['project']][$ref['index']] = $line;
-            continue;
-        }
-
-        $needed = elpis_line_qty_still_needed($line);
-        $contractEntryNo = (int) ($line['job_contract_entry_no'] ?? 0);
-        $jobKey = strtoupper(trim($ref['project'])) . '|' . $contractEntryNo;
-        $itemKey = strtoupper(trim((string) ($line['item_no'] ?? '')));
-        $stockQty = 0.0;
-        $poQty = 0.0;
-        $poDates = [];
-
-        if ($contractEntryNo > 0 && $itemKey !== '') {
-            foreach ($demandByJobContract[$jobKey] ?? [] as $demand) {
-                $demandItem = strtoupper(trim((string) ($demand['item_no'] ?? '')));
-                if ($demandItem === '' || $demandItem !== $itemKey) {
-                    continue;
-                }
-                $entryNo = (int) ($demand['entry_no'] ?? 0);
-                foreach ($byEntry[$entryNo] ?? [] as $supply) {
-                    if (elpis_reservation_is_stock_supply($supply)) {
-                        $stockQty += elpis_reservation_qty($supply);
-                        continue;
-                    }
-                    if (!elpis_reservation_is_purchase_supply($supply)) {
-                        continue;
-                    }
-                    $date = elpis_date_for_purchase_supply($supply, $byDocLine, $byDocItem);
-                    if ($date === '') {
-                        continue;
-                    }
-                    $poQty += elpis_reservation_qty($supply);
-                    $poDates[] = $date;
-                }
-            }
-        }
-
-        $fromFree = 0.0;
-        if ($itemKey !== '' && isset($inventoryKnown[$itemKey]) && $needed > $stockQty) {
-            $fromFree = min((float) ($free[$itemKey] ?? 0), $needed - $stockQty);
-            $free[$itemKey] = max(0.0, (float) ($free[$itemKey] ?? 0) - $fromFree);
-        }
-
-        $coveredByStock = $stockQty + $fromFree;
-        $poDate = elpis_latest_date($poDates);
-        $datedQty = $poQty;
-        if ($datedQty <= 0.00001) {
-            $purchaseOrderNo = trim((string) ($line['purchase_order_no'] ?? ''));
-            if ($purchaseOrderNo !== '') {
-                $documentDate = elpis_latest_date(elpis_dates_for_document_item(
-                    $purchaseOrderNo,
-                    (string) ($line['item_no'] ?? ''),
-                    $byDocItem
-                ));
-                if ($documentDate !== '') {
-                    $datedQty = max(0.0, $needed - $coveredByStock);
-                    $poDate = $documentDate;
-                }
-            }
-        }
-
-        $line['covered_by_stock'] = $coveredByStock;
-        $gap = $needed - $coveredByStock - $datedQty;
-        $enoughOnStock = $needed <= 0.00001 || $coveredByStock + 0.00001 >= $needed;
-
-        if ($enoughOnStock) {
-            $line['receipt_state'] = 'on_stock';
-            $line['expected_receipt_date'] = '';
-        } elseif ($gap <= 0.00001 && $poDate !== '') {
-            $line['receipt_state'] = $coveredByStock > 0.00001 ? 'partial' : 'date';
-            $line['expected_receipt_date'] = $poDate;
-        } elseif ($coveredByStock > 0.00001 || $poDate !== '') {
-            $line['receipt_state'] = 'uncovered';
-            $line['expected_receipt_date'] = $poDate;
-        } else {
-            $line['receipt_state'] = 'missing';
-            $line['expected_receipt_date'] = '';
-        }
-
-        $linesByProject[$ref['project']][$ref['index']] = $line;
     }
 
     return $linesByProject;
+}
+
+function elpis_finalize_line(
+    array $line,
+    string $projectKey,
+    array $byDocLine,
+    array $postingDates,
+    array $workOrders,
+    array $inventoryKnown,
+    array $reservedTotal,
+    array $reservedOwn
+): array {
+    $workOrderNo = trim((string) ($line['work_order_no'] ?? ''));
+    if ($workOrderNo !== '' && isset($workOrders[strtoupper($workOrderNo)]) && is_array($workOrders[strtoupper($workOrderNo)])) {
+        $line['work_order_no'] = (string) ($workOrders[strtoupper($workOrderNo)]['no'] ?? $workOrderNo);
+        $line['work_order_description'] = (string) ($workOrders[strtoupper($workOrderNo)]['description'] ?? '');
+    }
+
+    $kvtDate = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
+    if ($kvtDate !== '') {
+        $line['expected_receipt_date'] = substr($kvtDate, 0, 10);
+        $line['expected_receipt_source'] = 'WerkordersLines -> KVT_Expected_Receipt_Date';
+    } else {
+        $documentNo = strtoupper(trim((string) ($line['purchase_order_no'] ?? '')));
+        $purchaseLineNo = (int) ($line['purchase_order_line_no'] ?? 0);
+        $purchase = ($documentNo !== '' && $purchaseLineNo > 0) ? ($byDocLine[$documentNo . '|' . $purchaseLineNo] ?? null) : null;
+        if (is_array($purchase)) {
+            if (!empty($purchase['completely_received'])) {
+                $line['completely_received'] = true;
+            }
+            foreach ([
+                'expected_receipt_date' => 'Expected_Receipt_Date',
+                'promised_receipt_date' => 'Promised_Receipt_Date',
+                'planned_receipt_date' => 'Planned_Receipt_Date',
+            ] as $key => $field) {
+                $date = elpis_normalize_bc_date((string) ($purchase[$key] ?? ''));
+                if ($date === '') {
+                    continue;
+                }
+                $line['expected_receipt_date'] = substr($date, 0, 10);
+                $line['expected_receipt_source'] = 'PurchaseLines -> ' . $field;
+                break;
+            }
+        }
+    }
+
+    $taskKey = strtoupper(trim((string) ($line['job_task_no'] ?? '')));
+    $itemKey = strtoupper(trim((string) ($line['item_no'] ?? '')));
+    $postingKey = $projectKey . '|' . $taskKey . '|' . $itemKey;
+    if (isset($postingDates[$postingKey])) {
+        $line['received_date'] = $postingDates[$postingKey];
+    }
+
+    $line = elpis_refresh_receipt_state($line);
+
+    if ($itemKey !== '' && array_key_exists($itemKey, $inventoryKnown)) {
+        $elsewhere = (float) ($reservedTotal[$itemKey] ?? 0) - (float) ($reservedOwn[$itemKey . '|' . $projectKey] ?? 0);
+        $line['reserved_elsewhere'] = max(0.0, $elsewhere);
+        $line['free_stock'] = (float) $inventoryKnown[$itemKey] - $line['reserved_elsewhere'];
+    }
+
+    return $line;
 }
 
 function elpis_enrich_planning_lines_with_receipts(string $company, array $linesByProject, int $ttl = ELPI_CACHE_TTL, ?callable $onInventoryChunk = null, ?callable $onPhase = null): array
@@ -2071,7 +2311,11 @@ function elpis_enrich_planning_lines_with_receipts(string $company, array $lines
         $linesByProject,
         $context['reservations'],
         $context['purchase_lines'],
-        $context['inventory']
+        $context['inventory'],
+        [
+            'receipts' => $context['receipts'] ?? [],
+            'work_orders' => $context['work_orders'] ?? [],
+        ]
     );
 }
 
@@ -2108,26 +2352,24 @@ function elpis_project_execution_summary(array $lines): array
     $hasMissing = false;
 
     foreach ($lines as $line) {
-        if (!is_array($line) || !elpis_line_still_expecting_receipt($line)) {
+        if (!is_array($line)) {
+            continue;
+        }
+
+        $state = (string) ($line['receipt_state'] ?? '');
+        if ($state === 'received' || $state === 'not_required' || elpis_line_is_received($line) || elpis_line_is_not_required($line)) {
             continue;
         }
 
         $hasOpen = true;
-        $state = (string) ($line['receipt_state'] ?? '');
-        if ($state === 'on_stock' || $state === 'received') {
-            continue;
-        }
-
-        if ($state === 'missing' || $state === 'uncovered') {
+        if ($state === 'unconfirmed' || $state === 'missing') {
             $hasMissing = true;
             continue;
         }
 
         $date = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
         if ($date === '') {
-            if ($state !== '') {
-                $hasMissing = true;
-            }
+            $hasMissing = true;
             continue;
         }
 
@@ -2207,6 +2449,7 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
         'reservation_entries' => 0,
         'purchase_order_lines' => 0,
         'item_inventory' => 0,
+        'by_company' => [],
     ];
 
     $companies = elpis_companies_for_page($ttl);
@@ -2220,18 +2463,15 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
         $projects = elpis_fetch_projects_for_company($company, $ttl);
         $summary['projects'] += count($projects);
 
-        foreach ($managers as $manager) {
-            $managerProjects = elpis_filter_projects_for_manager($projects, $manager);
-            elpis_load_shown_lines($company, elpis_project_nos_from_projects($managerProjects), $ttl);
-        }
-
-        $linesByProject = elpis_fetch_planning_lines_by_projects($company, elpis_project_nos_from_projects($projects), $ttl);
+        $linesByProject = elpis_load_shown_lines($company, elpis_project_nos_from_projects($projects), $ttl);
         $summary['planning_line_projects'] += count($linesByProject);
-
-        $receiptContext = elpis_load_receipt_context($company, $linesByProject, $ttl);
-        $summary['reservation_entries'] += count($receiptContext['reservations']);
-        $summary['purchase_order_lines'] += count($receiptContext['purchase_lines']);
-        $summary['item_inventory'] += count($receiptContext['inventory']);
+        $summary['by_company'][$company] = [
+            'projects' => $projects,
+            'lines' => $linesByProject,
+        ];
+        foreach ($linesByProject as $projectNo => $lines) {
+            elpis_write_project_cache($company, (string) $projectNo, is_array($lines) ? $lines : []);
+        }
     }
 
     return $summary;
@@ -2243,9 +2483,11 @@ function elpis_line_search_blob(array $line, string $projectNo = ''): string
     $parts = [
         $projectNo,
         (string) ($line['job_task_no'] ?? ''),
+        (string) ($line['work_order_no'] ?? ''),
         (string) ($line['item_no'] ?? ''),
         (string) ($line['description'] ?? ''),
         $materialStatus,
+        (string) ($line['planning_date'] ?? ''),
         elpis_line_expected_receipt_display($line),
     ];
 
@@ -2282,3 +2524,244 @@ function elpis_project_search_blob(array $project, array $lines): string
         return $value !== '';
     })));
 }
+
+function elpis_data_dir(): string
+{
+    $override = $GLOBALS['ELPIS_DATA_DIR'] ?? null;
+    $dir = is_string($override) && trim($override) !== '' ? $override : (__DIR__ . '/data');
+    if (!is_dir($dir)) {
+        mkdir($dir, 0750, true);
+    }
+
+    return $dir;
+}
+
+function elpis_project_cache_dir(): string
+{
+    $override = $GLOBALS['ELPIS_PROJECT_CACHE_DIR'] ?? null;
+    $dir = is_string($override) && trim($override) !== '' ? $override : (__DIR__ . '/cache/elpis_projects');
+    if (!is_dir($dir)) {
+        mkdir($dir, 0777, true);
+    }
+
+    return $dir;
+}
+
+function elpis_project_cache_path(string $company, string $projectNo): string
+{
+    return elpis_project_cache_dir() . '/' . hash('sha256', $company . "\0" . $projectNo) . '.json';
+}
+
+function elpis_read_project_cache(string $company, string $projectNo): ?array
+{
+    $path = elpis_project_cache_path($company, $projectNo);
+    if (!is_file($path)) {
+        return null;
+    }
+
+    $decoded = json_decode((string) file_get_contents($path), true);
+    if (!is_array($decoded)) {
+        return null;
+    }
+
+    if ((int) ($decoded['expires_at'] ?? 0) < time()) {
+        return null;
+    }
+
+    if (is_array($decoded['lines'] ?? null)) {
+        foreach ($decoded['lines'] as $index => $line) {
+            if (is_array($line)) {
+                $decoded['lines'][$index] = elpis_refresh_receipt_state($line);
+            }
+        }
+    }
+
+    return $decoded;
+}
+
+function elpis_write_project_cache(string $company, string $projectNo, array $lines): void
+{
+    $path = elpis_project_cache_path($company, $projectNo);
+    $now = time();
+    $payload = [
+        'company' => $company,
+        'project_no' => $projectNo,
+        'cached_at' => $now,
+        'expires_at' => $now + ELPI_CACHE_TTL,
+        'lines' => array_values($lines),
+    ];
+    $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        return;
+    }
+
+    $tmp = $path . '.tmp';
+    file_put_contents($tmp, $json, LOCK_EX);
+    rename($tmp, $path);
+}
+
+function elpis_load_project_modal_lines(string $company, string $projectNo, bool $refresh): array
+{
+    $company = trim($company);
+    $projectNo = trim($projectNo);
+    if ($company === '' || $projectNo === '') {
+        return [];
+    }
+
+    if (!$refresh) {
+        $cached = elpis_read_project_cache($company, $projectNo);
+        if (is_array($cached) && is_array($cached['lines'] ?? null)) {
+            return $cached['lines'];
+        }
+    }
+
+    $load = static function () use ($company, $projectNo): array {
+        $byProject = elpis_load_shown_lines($company, [$projectNo], ELPI_CACHE_TTL);
+
+        return $byProject[$projectNo] ?? [];
+    };
+
+    if ($refresh) {
+        $previous = $GLOBALS['ELPIS_LIVE_FETCH'] ?? false;
+        $GLOBALS['ELPIS_LIVE_FETCH'] = true;
+        elpis_reset_fetch_memo();
+        try {
+            $lines = $load();
+        } finally {
+            $GLOBALS['ELPIS_LIVE_FETCH'] = $previous;
+            elpis_reset_fetch_memo();
+        }
+    } else {
+        $lines = $load();
+    }
+
+    elpis_write_project_cache($company, $projectNo, $lines);
+
+    return $lines;
+}
+
+function elpis_status_tone(string $code): string
+{
+    $code = strtoupper(trim($code));
+    if ($code === ELPI_STATUS_LATE || $code === 'T' || $code === 'X') {
+        return 'alert';
+    }
+    if ($code === 'I') {
+        return 'orange';
+    }
+    if (in_array($code, ['V', 'G', 'B', 'A', 'C'], true)) {
+        return 'ok';
+    }
+    if ($code === 'N') {
+        return 'muted';
+    }
+
+    return 'warn';
+}
+
+function elpis_line_filter_status(array $line): string
+{
+    $line = elpis_refresh_receipt_state($line);
+    if ((string) ($line['receipt_state'] ?? '') === 'late') {
+        return ELPI_STATUS_LATE;
+    }
+
+    return strtoupper(trim((string) ($line['material_status'] ?? '')));
+}
+
+function elpis_line_row_tone(array $line): string
+{
+    $line = elpis_refresh_receipt_state($line);
+    if ((string) ($line['receipt_state'] ?? '') === 'late') {
+        return 'alert';
+    }
+
+    $status = strtoupper(trim((string) ($line['material_status'] ?? '')));
+    if ($status === '') {
+        return '';
+    }
+
+    return elpis_status_tone($status);
+}
+
+function elpis_line_tooltips(array $line): array
+{
+    $receiptSource = trim((string) ($line['expected_receipt_source'] ?? ''));
+    if ((string) ($line['receipt_state'] ?? '') === 'received') {
+        $receiptSource = elpis_normalize_bc_date((string) ($line['received_date'] ?? '')) !== ''
+            ? 'ItemLedgerEntries -> Posting_Date'
+            : 'PurchaseLines -> LVS_Completely_Received';
+    }
+    if ($receiptSource === '') {
+        $receiptSource = 'WerkordersLines -> KVT_Expected_Receipt_Date';
+    }
+
+    $planningField = trim((string) ($line['planning_date_field'] ?? 'Planning_Date'));
+    if ($planningField === '') {
+        $planningField = 'Planning_Date';
+    }
+
+    return [
+        'workorder' => '(AppWerkorders -> No)',
+        'item' => '(WerkordersLines -> No)',
+        'description' => '(WerkordersLines -> Description)',
+        'planning_date' => '(WerkordersLines -> ' . $planningField . ')',
+        'material_status' => '(WerkordersLines -> KVT_Status_Material)',
+        'to_order' => '(WerkordersLines -> Quantity)',
+        'ordered' => '(AppProjectInkoopPlanningsRegel -> LVS_Quantity_Order_UoM)',
+        'open' => '(AppProjectInkoopPlanningsRegel -> LVS_Outstanding_Qty_Base)',
+        'received' => '(AppProjectInkoopPlanningsRegel -> LVS_Outstanding_Qty_Base)',
+        'expected_receipt' => '(' . $receiptSource . ')',
+        'stock' => '(AppItems -> InventoryField)',
+    ];
+}
+
+function elpis_format_qty(float $value): string
+{
+    if (abs($value - round($value)) < 0.00001) {
+        return (string) (int) round($value);
+    }
+
+    return rtrim(rtrim(number_format($value, 2, ',', '.'), '0'), ',');
+}
+
+function elpis_line_public_payload(array $line, string $projectNo): array
+{
+    $materialStatus = (string) ($line['material_status'] ?? '');
+    $materialLabel = (string) ($line['material_status_label'] ?? '');
+    if ($materialLabel === '' && $materialStatus !== '' && function_exists('elpis_material_status_label')) {
+        $materialLabel = elpis_material_status_label($materialStatus);
+    }
+
+    $freeStock = $line['free_stock'] ?? null;
+    $freeDisplay = is_numeric($freeStock) ? elpis_format_qty((float) $freeStock) : '';
+
+    return [
+        'work_order_no' => (string) ($line['work_order_no'] ?? ''),
+        'item_no' => (string) ($line['item_no'] ?? ''),
+        'description' => (string) ($line['description'] ?? ''),
+        'planning_date' => elpis_format_display_date((string) ($line['planning_date'] ?? '')),
+        'planning_date_sort' => elpis_normalize_bc_date((string) ($line['planning_date'] ?? '')),
+        'material_status' => $materialStatus,
+        'material_status_label' => $materialLabel,
+        'qty_to_order' => (float) ($line['qty_to_order'] ?? 0),
+        'qty_ordered' => (float) ($line['qty_ordered'] ?? 0),
+        'qty_open' => (float) ($line['qty_open'] ?? 0),
+        'qty_received' => (float) ($line['qty_received'] ?? 0),
+        'qty_to_order_display' => elpis_format_qty((float) ($line['qty_to_order'] ?? 0)),
+        'qty_ordered_display' => elpis_format_qty((float) ($line['qty_ordered'] ?? 0)),
+        'qty_open_display' => elpis_format_qty((float) ($line['qty_open'] ?? 0)),
+        'qty_received_display' => elpis_format_qty((float) ($line['qty_received'] ?? 0)),
+        'expected_receipt' => elpis_line_expected_receipt_display($line),
+        'expected_receipt_sort' => elpis_receipt_sort_value($line),
+        'free_stock_display' => $freeDisplay,
+        'free_stock_sort' => is_numeric($freeStock) ? (string) (float) $freeStock : '',
+        'tone' => elpis_line_row_tone($line),
+        'filter_status' => elpis_line_filter_status($line),
+        'receipt_state' => (string) ($line['receipt_state'] ?? ''),
+        'search' => elpis_line_search_blob($line, $projectNo),
+        'tooltips' => elpis_line_tooltips($line),
+    ];
+}
+
+require_once __DIR__ . '/elpis_mail.php';

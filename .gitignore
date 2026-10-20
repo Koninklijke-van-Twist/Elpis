@@ -6,6 +6,9 @@ web/cache/
 BC Webservices.txt
 
 web/data/user_prefs/
+web/data/nightly_state.json
+web/data/nightly.lock
+web/data/mail_config.json
 
 web/analytics/analytics.sqlite
 web/analytics/analytics.sqlite-*
