@@ -52,97 +52,58 @@ $savedManagersByCompany = elpis_load_manager_prefs($userEmail);
 $companyReloaded = isset($_GET['reload_managers']);
 
 $companies = elpis_companies_for_page();
-$savedCompany = (string) ($userPrefs['elpis_company'] ?? '');
 $requestedCompany = trim((string) ($_GET['company'] ?? ''));
 $requestedManager = $companyReloaded ? '' : trim((string) ($_GET['manager'] ?? ''));
-$discoveredSelection = elpis_discover_selection_for_new_user(
-    $companies,
-    $userEmail,
-    $requestedCompany,
-    $requestedManager,
-    $savedCompany,
-    $savedManagersByCompany
-);
-$preselectedManager = null;
 
-if (is_array($discoveredSelection)) {
-    $company = (string) ($discoveredSelection['company'] ?? '');
-    if ($company === '' || !in_array($company, $companies, true)) {
-        $company = elpis_resolve_company_choice($companies, $requestedCompany, $savedCompany);
-    } else {
-        $preselectedManager = trim((string) ($discoveredSelection['manager'] ?? ''));
-    }
-} else {
-    $company = elpis_resolve_company_choice($companies, $requestedCompany, $savedCompany);
+if ($requestedCompany === '' || !in_array($requestedCompany, $companies, true)) {
+    elpis_progress_emit(['complete' => true]);
+    exit;
 }
 
+$company = $requestedCompany;
 $projectManager = '';
 
 try {
+    $progressStartedAt = microtime(true);
     auth_set_current_company_context($company);
 
     elpis_progress_emit(['step' => 'managers', 'status' => 'start']);
     $projectManagers = elpis_fetch_project_managers($company);
-
-    if ($preselectedManager !== null && $preselectedManager !== '') {
-        $projectManager = elpis_pick_manager_from_list($projectManagers, $preselectedManager);
-        if ($projectManager === '') {
-            $projectManager = elpis_resolve_manager_choice(
-                $projectManagers,
-                $requestedManager,
-                $company,
-                $savedManagersByCompany,
-                $userEmail
-            );
-        }
-    } else {
-        $projectManager = elpis_resolve_manager_choice(
-            $projectManagers,
-            $requestedManager,
-            $company,
-            $savedManagersByCompany,
-            $userEmail
-        );
-    }
+    $projectManager = elpis_resolve_manager_choice(
+        $projectManagers,
+        $requestedManager,
+        $company,
+        $savedManagersByCompany,
+        $userEmail
+    );
 
     elpis_progress_emit(['step' => 'managers', 'status' => 'done']);
 
-    if ($companyReloaded || $projectManager === '') {
+    if ($projectManager === '') {
         if ($company !== '') {
             elpis_save_dropdown_prefs($userEmail, $company, $projectManager);
         }
+        elpis_log_timing($company, 'progress', ['$filter' => 'manager='], 0, $progressStartedAt, 'html');
         elpis_progress_emit(['complete' => true]);
         exit;
     }
 
     elpis_progress_emit(['step' => 'projects', 'status' => 'start']);
-    elpis_fetch_projects_for_manager($company, $projectManager);
+    $projects = elpis_fetch_projects_for_manager($company, $projectManager);
     elpis_progress_emit(['step' => 'projects', 'status' => 'done']);
-
-    elpis_progress_emit(['step' => 'lines', 'status' => 'start']);
-    $linesByProject = elpis_fetch_planning_lines_for_company($company);
-    elpis_progress_emit(['step' => 'lines', 'status' => 'done']);
-
-    elpis_progress_emit(['step' => 'reservations', 'status' => 'start']);
-    elpis_fetch_reservation_entries($company);
-    elpis_progress_emit(['step' => 'reservations', 'status' => 'done']);
-
-    elpis_progress_emit(['step' => 'purchase', 'status' => 'start']);
-    elpis_fetch_open_purchase_order_lines($company);
-    elpis_progress_emit(['step' => 'purchase', 'status' => 'done']);
-
-    $inventoryItems = elpis_collect_stock_item_nos($linesByProject);
-    $inventoryChunks = elpis_item_inventory_chunk_count($inventoryItems);
-    elpis_progress_emit(['step' => 'inventory', 'status' => 'start', 'done' => 0, 'total' => $inventoryChunks]);
-    elpis_fetch_item_inventory($company, $inventoryItems, ELPI_CACHE_TTL, static function (int $done, int $total): void {
-        elpis_progress_emit(['step' => 'inventory', 'status' => 'progress', 'done' => $done, 'total' => $total]);
-    });
-    elpis_progress_emit(['step' => 'inventory', 'status' => 'done', 'done' => $inventoryChunks, 'total' => $inventoryChunks]);
 
     if ($company !== '') {
         elpis_save_dropdown_prefs($userEmail, $company, $projectManager);
     }
 
+    elpis_log_timing(
+        $company,
+        'progress',
+        ['$filter' => 'manager=' . $projectManager . ' projects=' . count($projects)],
+        count($projects),
+        $progressStartedAt,
+        'html'
+    );
     elpis_progress_emit(['complete' => true]);
 } catch (Throwable $loadError) {
     elpis_progress_emit(['error' => true]);
