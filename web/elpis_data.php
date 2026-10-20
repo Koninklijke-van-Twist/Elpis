@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 9;
+const ELPI_PROJECT_CACHE_VERSION = 10;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -2702,6 +2702,7 @@ function elpis_apply_receipt_expectations(array $linesByProject, array $reservat
             $linesByProject[$projectNo],
             $receiptQty
         );
+        $linesByProject[$projectNo] = elpis_clear_covered_to_order($linesByProject[$projectNo]);
     }
 
     return $linesByProject;
@@ -2843,6 +2844,79 @@ function elpis_apply_ledger_receipt_quantities(string $projectNo, array $lines, 
                 ]);
             }
         }
+    }
+
+    return $lines;
+}
+
+function elpis_line_is_picked(array $line): bool
+{
+    if (!empty($line['completely_picked'])) {
+        return true;
+    }
+
+    $quantity = (float) ($line['quantity'] ?? 0);
+    $picked = (float) ($line['kvt_qty_picked'] ?? 0);
+    if ($quantity > 0.00001 && $picked + 0.00001 >= $quantity) {
+        return true;
+    }
+
+    return strtoupper(trim((string) ($line['material_status'] ?? ''))) === 'G';
+}
+
+function elpis_clear_covered_to_order(array $lines): array
+{
+    // Een werkorderregel zonder inkoopnummer krijgt Quantity als Te bestellen.
+    // Die regel blijft zichtbaar. Te bestellen wordt 0 als hij gepickt is, of
+    // als een ontvangen inkoopregel van hetzelfde artikel de behoefte dekt.
+    $receivedByItem = [];
+    foreach ($lines as $line) {
+        if (!is_array($line) || trim((string) ($line['purchase_order_no'] ?? '')) === '') {
+            continue;
+        }
+        if (!elpis_line_is_received($line)) {
+            continue;
+        }
+        $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
+        if ($item === '') {
+            continue;
+        }
+        $receivedByItem[$item] = ($receivedByItem[$item] ?? 0.0) + max(0.0, (float) ($line['qty_received'] ?? 0));
+    }
+
+    foreach ($lines as $index => $line) {
+        if (!is_array($line) || !elpis_line_is_picked($line)) {
+            continue;
+        }
+        $lines[$index]['qty_to_order'] = 0.0;
+        if (trim((string) ($line['purchase_order_no'] ?? '')) !== '') {
+            continue;
+        }
+        $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
+        if ($item === '' || !isset($receivedByItem[$item])) {
+            continue;
+        }
+        $receivedByItem[$item] = max(0.0, $receivedByItem[$item] - max(0.0, (float) ($line['quantity'] ?? 0)));
+    }
+
+    foreach ($lines as $index => $line) {
+        if (!is_array($line) || elpis_line_is_picked($line)) {
+            continue;
+        }
+        if (trim((string) ($line['purchase_order_no'] ?? '')) !== '') {
+            continue;
+        }
+        $toOrder = (float) ($line['qty_to_order'] ?? 0);
+        if ($toOrder <= 0.00001) {
+            continue;
+        }
+        $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
+        $covered = $receivedByItem[$item] ?? 0.0;
+        if ($item === '' || $covered + 0.00001 < $toOrder) {
+            continue;
+        }
+        $lines[$index]['qty_to_order'] = 0.0;
+        $receivedByItem[$item] = $covered - $toOrder;
     }
 
     return $lines;

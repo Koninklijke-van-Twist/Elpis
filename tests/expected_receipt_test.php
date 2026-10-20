@@ -1256,8 +1256,8 @@ file_put_contents($stalePath, json_encode([
 if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
     fail('projectcache zonder versie wordt genegeerd');
 }
-if (ELPI_PROJECT_CACHE_VERSION !== 9) {
-    fail('projectcacheversie moet 9 zijn zodat PurchaseLines zonder LVS_Completely_Received opnieuw wordt opgehaald');
+if (ELPI_PROJECT_CACHE_VERSION !== 10) {
+    fail('projectcacheversie moet 10 zijn zodat een gepickte werkorderregel geen Te bestellen meer toont');
 }
 $previousVersionPath = elpis_project_cache_path('Koninklijke van Twist', '153390');
 file_put_contents($previousVersionPath, json_encode([
@@ -1490,8 +1490,39 @@ $bcBoltsPayload = elpis_line_public_payload($bcBolts, '153390');
 if (($bcBolts['work_order_no'] ?? 'x') !== '' || ($bcBolts['purchase_order_no'] ?? '') !== 'PO12600678' || (int) ($bcBolts['purchase_order_line_no'] ?? 0) !== 10000 || abs(elpis_line_shown_ordered_qty($bcBolts) - 1) > 0.00001 || abs((float) ($bcBolts['qty_open'] ?? -1)) > 0.00001 || abs(elpis_line_shown_received_qty($bcBolts) - 1) > 0.00001 || abs((float) ($bcBolts['quantity'] ?? 0) - 112) > 0.00001 || !elpis_line_is_received($bcBolts) || elpis_line_is_late($bcBolts) || ($bcBolts['receipt_state'] ?? '') !== 'received' || ($bcBoltsPayload['expected_receipt'] ?? '') === 'Te laat' || ($bcBoltsPayload['qty_ordered'] ?? null) !== 1.0) {
     fail('PI20000438 toont de inkoopregel 1/0/1 en niet de planningsregel 112: ' . json_encode($bcBoltsPayload));
 }
-if (($bcWorkOrder['work_order_no'] ?? '') !== '4066161' || ($bcWorkOrder['purchase_order_no'] ?? 'x') !== '' || ($bcWorkOrder['material_status'] ?? '') !== 'G' || ($bcWorkOrder['receipt_state'] ?? '') !== 'received') {
-    fail('de werkorderregel 4066161/2585000 blijft los van de inkoopregel: ' . json_encode($bcWorkOrder));
+$bcWorkOrderPayload = elpis_line_public_payload($bcWorkOrder, '153390');
+if (($bcWorkOrder['work_order_no'] ?? '') !== '4066161' || ($bcWorkOrder['purchase_order_no'] ?? 'x') !== '' || ($bcWorkOrder['material_status'] ?? '') !== 'G' || ($bcWorkOrder['receipt_state'] ?? '') !== 'received' || abs((float) ($bcWorkOrder['qty_to_order'] ?? -1)) > 0.00001 || ($bcWorkOrderPayload['qty_to_order_display'] ?? 'x') !== '0' || abs((float) ($bcWorkOrderPayload['qty_ordered'] ?? -1)) > 0.00001) {
+    fail('de gepickte werkorderregel 4066161/2585000 blijft zichtbaar maar Te bestellen is 0: ' . json_encode($bcWorkOrderPayload));
+}
+$pickedOnly = elpis_apply_receipt_expectations(['153390' => [planningLine([
+    'line_no' => 2585000,
+    'item_no' => 'PI20001429',
+    'work_order_no' => '4066161',
+    'purchase_order_no' => '',
+    'purchase_order_line_no' => 0,
+    'quantity' => 1,
+    'qty_to_order' => 1,
+    'qty_ordered' => 0,
+    'qty_received' => 0,
+    'material_status' => 'O',
+    'completely_picked' => true,
+])]], [], [], []);
+if (abs((float) ($pickedOnly['153390'][0]['qty_to_order'] ?? -1)) > 0.00001) {
+    fail('KVT_Completely_Picked zet Te bestellen op 0: ' . json_encode($pickedOnly['153390'][0]));
+}
+$stillToOrder = elpis_apply_receipt_expectations(['153390' => [planningLine([
+    'line_no' => 2700000,
+    'item_no' => 'PI20009999',
+    'work_order_no' => '4066161',
+    'purchase_order_no' => '',
+    'purchase_order_line_no' => 0,
+    'quantity' => 1,
+    'qty_to_order' => 1,
+    'material_status' => 'O',
+    'completely_picked' => false,
+])]], [], [], []);
+if (abs((float) ($stillToOrder['153390'][0]['qty_to_order'] ?? 0) - 1) > 0.00001) {
+    fail('een niet gepickte werkorderregel zonder dekking blijft Te bestellen: ' . json_encode($stillToOrder['153390'][0]));
 }
 
 $debugPlanning = [[
