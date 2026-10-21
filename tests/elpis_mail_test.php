@@ -134,9 +134,90 @@ foreach ($mailLines['PRJ1'] as $mailLine) {
         $mailed[] = $mailLine;
     }
 }
-[$mailSubject, $mailPlain] = elpis_digest_message('KVT\\RDBOER', 'rdboer@kvt.nl', $mailed, true);
+[$mailSubject, $mailPlain, $mailHtml] = elpis_digest_message('KVT\\RDBOER', 'rdboer@kvt.nl', $mailed, true);
 if ($mailSubject === '' || count($mailed) !== 1 || !str_contains($mailPlain, 'PI24003010') || str_contains($mailPlain, 'PI20001186') || str_contains($mailPlain, 'PI20000169')) {
     fail('PM-mail slaat volledig ontvangen regels over: ' . $mailPlain);
+}
+if (!str_contains($mailPlain, '2 weken te laat') || !str_contains($mailPlain, 'Te laat')) {
+    fail('te late inkoopregel noemt de duur vanaf de verwachte ontvangstdatum: ' . $mailPlain);
+}
+if (stripos($mailHtml, '<style') !== false || !str_contains($mailHtml, 'background-color:#fdebec') || !str_contains($mailHtml, 'color:#b42318') || !str_contains($mailHtml, 'background-color:#00529B')) {
+    fail('mail gebruikt inline stijl zoals de site, zonder style-blok');
+}
+if (!str_contains($mailHtml, 'Montserrat') || !str_contains($mailHtml, 'Toelichting') || !str_contains($mailHtml, '2 weken te laat')) {
+    fail('mailtabel heeft het sitelettertype en een toelichting');
+}
+
+if (elpis_mail_lateness_text(1, 'day') !== '1 dag te laat' || elpis_mail_lateness_text(8, 'day') !== '8 dagen te laat') {
+    fail('dagen hebben enkelvoud en meervoud');
+}
+if (elpis_mail_lateness_text(1, 'week') !== '1 week te laat' || elpis_mail_lateness_text(3, 'week') !== '3 weken te laat') {
+    fail('weken hebben enkelvoud en meervoud');
+}
+if (elpis_mail_lateness_text(1, 'month') !== '1 maand te laat' || elpis_mail_lateness_text(2, 'month') !== '2 maanden te laat') {
+    fail('maanden hebben enkelvoud en meervoud');
+}
+if (elpis_mail_lateness_for_days(1) !== '1 dag te laat' || elpis_mail_lateness_for_days(14) !== '14 dagen te laat') {
+    fail('tot 14 dagen blijft het dagen');
+}
+if (elpis_mail_lateness_for_days(15) !== '2 weken te laat' || elpis_mail_lateness_for_days(21) !== '3 weken te laat' || elpis_mail_lateness_for_days(59) !== '8 weken te laat') {
+    fail('na 14 dagen tot ongeveer 2 maanden wordt het weken: ' . elpis_mail_lateness_for_days(15) . ' / ' . elpis_mail_lateness_for_days(59));
+}
+if (elpis_mail_lateness_for_days(60) !== '2 maanden te laat' || elpis_mail_lateness_for_days(90) !== '3 maanden te laat') {
+    fail('vanaf ongeveer 2 maanden wordt het maanden: ' . elpis_mail_lateness_for_days(60) . ' / ' . elpis_mail_lateness_for_days(90));
+}
+
+$oneDay = elpis_mail_join_reasons(elpis_mail_line_reasons([
+    'expected_receipt_date' => '2026-10-19',
+    'material_status' => 'I',
+    'receipt_state' => '',
+]));
+$twoWeeks = elpis_mail_join_reasons(elpis_mail_line_reasons([
+    'expected_receipt_date' => '2026-10-01',
+    'material_status' => 'I',
+    'receipt_state' => 'late',
+]));
+$eightWeeks = elpis_mail_join_reasons(elpis_mail_line_reasons([
+    'expected_receipt_date' => '2026-08-22',
+    'material_status' => 'I',
+    'receipt_state' => '',
+]));
+$twoMonths = elpis_mail_join_reasons(elpis_mail_line_reasons([
+    'expected_receipt_date' => '2026-08-21',
+    'material_status' => 'I',
+    'receipt_state' => '',
+]));
+if ($oneDay !== '1 dag te laat' || $twoWeeks !== '2 weken te laat' || $eightWeeks !== '8 weken te laat' || $twoMonths !== '2 maanden te laat') {
+    fail('duur telt vanaf de verwachte ontvangstdatum van Te laat: ' . json_encode([$oneDay, $twoWeeks, $eightWeeks, $twoMonths]));
+}
+$missing = elpis_mail_join_reasons(elpis_mail_line_reasons($open));
+if ($missing !== 'Verwachte ontvangstdatum ontbreekt') {
+    fail('ontbrekende datum krijgt een toelichting: ' . $missing);
+}
+$separated = elpis_mail_join_reasons([
+    LOC('elpis.mail.reason.missing_date'),
+    elpis_mail_lateness_text(1, 'week'),
+]);
+if ($separated !== 'Verwachte ontvangstdatum ontbreekt; 1 week te laat') {
+    fail('meerdere redenen staan gescheiden: ' . $separated);
+}
+$reasonHtml = elpis_mail_reasons_html([
+    LOC('elpis.mail.reason.missing_date'),
+    elpis_mail_lateness_text(1, 'month'),
+], "font-family:Montserrat,'Segoe UI',Arial,sans-serif;font-size:14px;color:#111827;");
+if (!str_contains($reasonHtml, 'Verwachte ontvangstdatum ontbreekt') || !str_contains($reasonHtml, '1 maand te laat') || substr_count($reasonHtml, '<tr>') < 2) {
+    fail('meerdere redenen staan in de mail los van elkaar');
+}
+
+[$sampleSubject, $samplePlain, $sampleHtml] = elpis_digest_message('KVT\\RDBOER', 'rdboer@kvt.nl', [$late, $open], true);
+if (!str_contains($samplePlain, 'PRJ1 | WO1 | A | Laat | Te laat | 2 weken te laat') || !str_contains($samplePlain, 'Verwachte ontvangstdatum ontbreekt')) {
+    fail('platte mail toont Te laat en de toelichting: ' . $samplePlain);
+}
+if (!str_contains($sampleHtml, 'bgcolor="#fdebec"') || !str_contains($sampleHtml, 'Datum ontbreekt') || str_contains($sampleHtml, '| C |')) {
+    fail('te late regel is rood gemarkeerd en de onbevestigde regel blijft in de mail');
+}
+if ($sampleSubject === '' || !str_starts_with($sampleSubject, '[TEST] ')) {
+    fail('voorbeeldmail blijft in testmodus');
 }
 
 $config = elpis_mail_config();

@@ -482,6 +482,109 @@ function elpis_digest_rows_for_manager(array $projects, array $linesByProject, s
     return $rows;
 }
 
+function elpis_mail_h(string $value): string
+{
+    return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+}
+
+function elpis_mail_late_day_count(string $expectedYmd, string $todayYmd): int
+{
+    $expected = DateTimeImmutable::createFromFormat('!Y-m-d', substr($expectedYmd, 0, 10));
+    $today = DateTimeImmutable::createFromFormat('!Y-m-d', substr($todayYmd, 0, 10));
+    if (!$expected instanceof DateTimeImmutable || !$today instanceof DateTimeImmutable || $today <= $expected) {
+        return 0;
+    }
+
+    return (int) $expected->diff($today)->days;
+}
+
+function elpis_mail_lateness_text(int $count, string $unit): string
+{
+    if ($count < 1) {
+        $count = 1;
+    }
+    $key = $count === 1 ? 'elpis.mail.late.' . $unit : 'elpis.mail.late.' . $unit . 's';
+
+    return LOC($key, $count);
+}
+
+/**
+ * Grootste passende eenheid: t/m 14 dagen in dagen, daarna weken tot
+ * ongeveer 2 maanden (60 dagen), daarna maanden van 30 dagen.
+ */
+function elpis_mail_lateness_for_days(int $days): string
+{
+    if ($days < 1) {
+        $days = 1;
+    }
+    if ($days <= 14) {
+        return elpis_mail_lateness_text($days, 'day');
+    }
+    if ($days < 60) {
+        return elpis_mail_lateness_text(max(1, intdiv($days, 7)), 'week');
+    }
+
+    return elpis_mail_lateness_text(max(1, intdiv($days, 30)), 'month');
+}
+
+function elpis_mail_line_reasons(array $line, ?string $today = null): array
+{
+    $today = $today ?? elpis_today();
+    $line = elpis_refresh_receipt_state($line);
+    $reasons = [];
+    $date = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
+    $date = $date === '' ? '' : substr($date, 0, 10);
+
+    if ($date === '') {
+        $reasons[] = LOC('elpis.mail.reason.missing_date');
+    }
+
+    if ($date !== '' && elpis_line_is_late($line, $today)) {
+        $days = elpis_mail_late_day_count($date, $today);
+        $reasons[] = elpis_mail_lateness_for_days($days > 0 ? $days : 1);
+    }
+
+    return $reasons;
+}
+
+function elpis_mail_join_reasons(array $reasons): string
+{
+    $clean = [];
+    foreach ($reasons as $reason) {
+        $reason = trim((string) $reason);
+        if ($reason !== '') {
+            $clean[] = $reason;
+        }
+    }
+
+    return implode('; ', $clean);
+}
+
+function elpis_mail_reasons_html(array $reasons, string $cellStyle): string
+{
+    $clean = [];
+    foreach ($reasons as $reason) {
+        $reason = trim((string) $reason);
+        if ($reason !== '') {
+            $clean[] = $reason;
+        }
+    }
+    if ($clean === []) {
+        return '';
+    }
+    if (count($clean) === 1) {
+        return elpis_mail_h($clean[0]);
+    }
+
+    $rows = '';
+    foreach ($clean as $index => $reason) {
+        $gap = $index > 0 ? 'padding-top:6px;' : '';
+        $rows .= '<tr><td style="' . $gap . $cellStyle . '">' . elpis_mail_h($reason) . '</td></tr>';
+    }
+
+    return '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">' . $rows . '</table>';
+}
+
 function elpis_digest_message(string $manager, string $intendedEmail, array $lines, bool $testMode): array
 {
     $count = count($lines);
@@ -491,25 +594,68 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
     }
 
     $prefsUrl = elpis_preferences_url();
+    $font = "font-family:Montserrat,'Segoe UI',Arial,sans-serif;";
+    $lineColor = '#c9d7eb';
+    $cell = $font . 'padding:11px 10px;border-bottom:1px solid ' . $lineColor . ';text-align:left;vertical-align:top;font-size:14px;';
+    $head = $font . 'background-color:#00529B;color:#ffffff;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;text-align:left;padding:11px 10px;border-bottom:0;';
+    $headers = [
+        LOC('elpis.mail.col.project'),
+        LOC('elpis.col.workorder'),
+        LOC('elpis.col.item'),
+        LOC('elpis.col.description'),
+        LOC('elpis.mail.col.receipt'),
+        LOC('elpis.mail.col.note'),
+    ];
+    $headHtml = '';
+    foreach ($headers as $header) {
+        $headHtml .= '<td bgcolor="#00529B" style="' . $head . '">' . elpis_mail_h($header) . '</td>';
+    }
+
     $plainLines = [];
     $htmlRows = '';
     foreach ($lines as $line) {
+        if (!is_array($line)) {
+            continue;
+        }
+        $line = elpis_refresh_receipt_state($line);
         $projectNo = (string) ($line['project_no'] ?? '');
         $item = (string) ($line['item_no'] ?? '');
         $description = (string) ($line['description'] ?? '');
         $workOrder = (string) ($line['work_order_no'] ?? '');
         $state = (string) ($line['receipt_state'] ?? '');
-        $when = $state === 'unconfirmed'
-            ? LOC('elpis.receipt.missing')
-            : elpis_format_display_date((string) ($line['expected_receipt_date'] ?? ''));
-        $plainLines[] = $projectNo . ' | ' . $workOrder . ' | ' . $item . ' | ' . $description . ' | ' . $when;
-        $htmlRows .= '<tr>'
-            . '<td style="padding:6px 8px;border-bottom:1px solid #c9d7eb;">' . htmlspecialchars($projectNo, ENT_QUOTES, 'UTF-8') . '</td>'
-            . '<td style="padding:6px 8px;border-bottom:1px solid #c9d7eb;">' . htmlspecialchars($workOrder, ENT_QUOTES, 'UTF-8') . '</td>'
-            . '<td style="padding:6px 8px;border-bottom:1px solid #c9d7eb;">' . htmlspecialchars($item, ENT_QUOTES, 'UTF-8') . '</td>'
-            . '<td style="padding:6px 8px;border-bottom:1px solid #c9d7eb;">' . htmlspecialchars($description, ENT_QUOTES, 'UTF-8') . '</td>'
-            . '<td style="padding:6px 8px;border-bottom:1px solid #c9d7eb;">' . htmlspecialchars($when, ENT_QUOTES, 'UTF-8') . '</td>'
-            . '</tr>';
+        $late = $state === 'late' || elpis_line_is_late($line);
+        $reasons = elpis_mail_line_reasons($line);
+        $note = elpis_mail_join_reasons($reasons);
+        if ($late) {
+            $when = LOC('elpis.receipt.late');
+            $rowBg = '#fdebec';
+            $textColor = 'color:#111827;';
+            $whenColor = 'color:#b42318;font-weight:700;';
+            $noteColor = 'color:#b42318;font-weight:700;';
+        } elseif ($state === 'unconfirmed') {
+            $when = LOC('elpis.receipt.missing');
+            $rowBg = '#ffffff';
+            $textColor = 'color:#111827;';
+            $whenColor = 'color:#8a4b08;font-weight:700;';
+            $noteColor = 'color:#111827;';
+        } else {
+            $when = elpis_format_display_date((string) ($line['expected_receipt_date'] ?? ''));
+            $rowBg = '#ffffff';
+            $textColor = 'color:#111827;';
+            $whenColor = 'color:#111827;';
+            $noteColor = 'color:#111827;';
+        }
+        $plainLines[] = $projectNo . ' | ' . $workOrder . ' | ' . $item . ' | ' . $description . ' | ' . $when . ' | ' . $note;
+        $values = [$projectNo, $workOrder, $item, $description, $when];
+        $colors = [$textColor, $textColor, $textColor, $textColor, $whenColor];
+        $htmlRows .= '<tr>';
+        foreach ($values as $index => $value) {
+            $htmlRows .= '<td bgcolor="' . $rowBg . '" style="' . $cell . 'background-color:' . $rowBg . ';' . $colors[$index] . '">'
+                . elpis_mail_h($value) . '</td>';
+        }
+        $htmlRows .= '<td bgcolor="' . $rowBg . '" style="' . $cell . 'background-color:' . $rowBg . ';' . $noteColor . '">'
+            . elpis_mail_reasons_html($reasons, $font . 'font-size:14px;' . $noteColor) . '</td>';
+        $htmlRows .= '</tr>';
     }
 
     $intro = LOC('elpis.mail.intro', elpis_format_manager_label($manager), $count);
@@ -518,16 +664,20 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
     }
 
     $plain = $intro . "\n\n" . implode("\n", $plainLines) . "\n\n" . LOC('elpis.mail.prefs_link') . ': ' . $prefsUrl;
-    $htmlIntro = nl2br(htmlspecialchars($intro, ENT_QUOTES, 'UTF-8'), false);
-    $html = '<div style="font-family:Segoe UI,Arial,sans-serif;color:#111827;">'
-        . '<p>' . $htmlIntro . '</p>'
-        . '<table style="border-collapse:collapse;width:100%;font-size:14px;">'
-        . '<thead><tr>'
-        . '<th align="left">Project</th><th align="left">Werkorder</th><th align="left">Artikel</th><th align="left">Omschrijving</th><th align="left">Ontvangst</th>'
-        . '</tr></thead><tbody>' . $htmlRows . '</tbody></table>'
-        . '<p style="margin-top:24px;"><a href="' . htmlspecialchars($prefsUrl, ENT_QUOTES, 'UTF-8') . '">'
-        . htmlspecialchars(LOC('elpis.mail.prefs_link'), ENT_QUOTES, 'UTF-8') . '</a></p>'
-        . '</div>';
+    $htmlIntro = nl2br(elpis_mail_h($intro), false);
+    $html = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#eef6fc" style="background-color:#eef6fc;margin:0;padding:0;width:100%;">'
+        . '<tr><td align="center" bgcolor="#eef6fc" style="' . $font . 'background-color:#eef6fc;padding:16px 12px 32px;">'
+        . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="width:100%;max-width:760px;background-color:#ffffff;border:1px solid ' . $lineColor . ';border-top:4px solid #00529B;border-radius:14px;">'
+        . '<tr><td style="' . $font . 'padding:18px 20px 8px;color:#111827;font-size:15px;line-height:1.45;">' . $htmlIntro . '</td></tr>'
+        . '<tr><td style="padding:8px 12px 16px;">'
+        . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="' . $font . 'width:100%;border-collapse:collapse;border:1px solid ' . $lineColor . ';background-color:#ffffff;">'
+        . '<tr>' . $headHtml . '</tr>'
+        . $htmlRows
+        . '</table></td></tr>'
+        . '<tr><td style="' . $font . 'padding:4px 20px 20px;font-size:14px;">'
+        . '<a href="' . elpis_mail_h($prefsUrl) . '" style="color:#0099cc;font-weight:700;text-decoration:underline;">'
+        . elpis_mail_h(LOC('elpis.mail.prefs_link')) . '</a></td></tr>'
+        . '</table></td></tr></table>';
 
     return [$subject, $plain, $html];
 }
