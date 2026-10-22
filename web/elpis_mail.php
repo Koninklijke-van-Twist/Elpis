@@ -864,6 +864,29 @@ function elpis_nightly_needs_run(): bool
     return true;
 }
 
+/**
+ * Nachtelijke verversing: altijd live (Mímir max_age 0). Anders kan een tijdelijk lege
+ * Mímir-cache (AppProjecten/AppItems/AppWerkorders) uren blijven hangen en worden hele
+ * bedrijven stil overgeslagen.
+ */
+function elpis_nightly_warm_live(?callable $warm = null): array
+{
+    $previous = $GLOBALS['ELPIS_LIVE_FETCH'] ?? false;
+    $GLOBALS['ELPIS_LIVE_FETCH'] = true;
+    elpis_reset_fetch_memo();
+    try {
+        if ($warm !== null) {
+            return $warm();
+        }
+        elpis_clear_odata_cache();
+
+        return elpis_warm_odata_cache(ELPI_NIGHTLY_MAX_AGE);
+    } finally {
+        $GLOBALS['ELPIS_LIVE_FETCH'] = $previous;
+        elpis_reset_fetch_memo();
+    }
+}
+
 function elpis_run_nightly(bool $force = false): array
 {
     $lockPath = elpis_data_dir() . '/nightly.lock';
@@ -898,8 +921,7 @@ function elpis_run_nightly(bool $force = false): array
                 $summary = ['by_company' => []];
             }
         } else {
-            elpis_clear_odata_cache();
-            $summary = elpis_warm_odata_cache(ELPI_NIGHTLY_MAX_AGE);
+            $summary = elpis_nightly_warm_live();
         }
         $mail = elpis_dispatch_pm_digests(is_array($summary['by_company'] ?? null) ? $summary['by_company'] : []);
         unset($summary['by_company']);
