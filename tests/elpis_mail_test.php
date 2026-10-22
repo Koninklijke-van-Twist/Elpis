@@ -259,6 +259,12 @@ $result = elpis_dispatch_pm_digests($bundle, $tuesday);
 if (($result['sent'] ?? 0) !== 1 || count($sent) !== 1) {
     fail('een pm met treffers krijgt één mail: ' . json_encode($result));
 }
+$pc = $result['per_company']['Koninklijke van Twist'] ?? [];
+if (($pc['managers'] ?? 0) !== 1 || ($pc['recipients'] ?? 0) !== 1 || ($pc['lines'] ?? 0) !== 3
+    || ($pc['lines_matched'] ?? 0) < 1 || ($pc['sent'] ?? 0) !== 1 || ($pc['no_email'] ?? -1) !== 0
+    || !is_array($pc['receipt_states'] ?? null)) {
+    fail('per-bedrijf telling klopt niet: ' . json_encode($pc));
+}
 if ($sent[0]['to'] !== 'tfalken@kvt.nl') {
     fail('testmodus stuurt niet naar de pm: ' . $sent[0]['to']);
 }

@@ -76,12 +76,25 @@ echo 'elapsed_s=' . $elapsed . "\n";
 $mailPer = is_array($mail['per_company'] ?? null) ? $mail['per_company'] : [];
 foreach ((is_array($summary['per_company'] ?? null) ? $summary['per_company'] : []) as $companyName => $stats) {
     $m = is_array($mailPer[$companyName] ?? null) ? $mailPer[$companyName] : [];
+    $states = [];
+    foreach ((is_array($m['receipt_states'] ?? null) ? $m['receipt_states'] : []) as $state => $count) {
+        $states[] = $state . ':' . (int) $count;
+    }
     echo 'company="' . $companyName . '" managers=' . (int) ($stats['managers'] ?? 0)
+        . ' project_rows=' . (int) ($stats['project_rows'] ?? 0)
+        . ' project_managers=' . (int) ($stats['project_managers'] ?? 0)
+        . ' fetch_errors=' . (int) ($stats['fetch_errors'] ?? 0)
         . ' projects=' . (int) ($stats['projects'] ?? 0)
         . ' line_projects=' . (int) ($stats['line_projects'] ?? 0)
         . ' lines=' . (int) ($stats['lines'] ?? 0)
         . ' mail_managers=' . (int) ($m['managers'] ?? 0)
         . ' recipients=' . (int) ($m['recipients'] ?? 0)
+        . ' no_email=' . (int) ($m['no_email'] ?? 0)
+        . ' schedule=' . (int) ($m['schedule'] ?? 0)
+        . ' mail_lines=' . (int) ($m['lines'] ?? 0)
+        . ' lines_excluded=' . (int) ($m['lines_excluded'] ?? 0)
+        . ' lines_matched=' . (int) ($m['lines_matched'] ?? 0)
+        . ' receipt_states=' . ($states === [] ? '-' : implode(',', $states))
         . ' empty=' . (int) ($m['empty'] ?? 0)
         . ' sent=' . (int) ($m['sent'] ?? 0) . "\n";
 }

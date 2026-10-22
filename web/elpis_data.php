@@ -1097,14 +1097,18 @@ function elpis_collect_projects_from_rows(array $rows): array
 
 function elpis_fetch_projects_for_company(string $company, int $ttl = ELPI_CACHE_TTL): array
 {
-    $rows = elpis_try_fetch_rows($company, 'AppProjecten', [
+    return elpis_collect_projects_from_rows(elpis_fetch_project_rows_for_company($company, $ttl));
+}
+
+/** Ruwe AppProjecten-rijen (voor tellingen in de nightly), zonder client-side filter. */
+function elpis_fetch_project_rows_for_company(string $company, int $ttl = ELPI_CACHE_TTL): array
+{
+    return elpis_try_fetch_rows($company, 'AppProjecten', [
         '$select' => 'No,Description,Project_Manager',
         // Geen "Project_Manager ne ''" in de query: Mímir geeft daarop sinds de taalwissel van
         // POWERBISERV (22-10-2026) 200 met een lege set. Lege managers vallen client-side weg.
         '$orderby' => 'No desc',
     ], $ttl);
-
-    return elpis_collect_projects_from_rows($rows);
 }
 
 function elpis_filter_projects_for_manager(array $projects, string $projectManager): array
@@ -3378,7 +3382,9 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
         $managers = elpis_fetch_project_managers($company, $ttl);
         $summary['managers'] += count($managers);
 
-        $projects = elpis_fetch_projects_for_company($company, $ttl);
+        $errorsBefore = count((array) ($GLOBALS['ELPIS_FETCH_ERRORS'] ?? []));
+        $projectRows = elpis_fetch_project_rows_for_company($company, $ttl);
+        $projects = elpis_collect_projects_from_rows($projectRows);
         $summary['projects'] += count($projects);
 
         $linesByProject = elpis_load_shown_lines($company, elpis_project_nos_from_projects($projects), $ttl);
@@ -3392,8 +3398,19 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
             'projects' => count($projects),
             'line_projects' => count($linesByProject),
             'lines' => array_sum(array_map(static fn ($l): int => is_array($l) ? count($l) : 0, $linesByProject)),
+            'project_rows' => count($projectRows),
+            'project_managers' => count(array_unique(array_column($projects, 'project_manager'))),
+            'fetch_errors' => count((array) ($GLOBALS['ELPIS_FETCH_ERRORS'] ?? [])) - $errorsBefore,
         ];
-        error_log('elpis.nightly company="' . $company . '" managers=' . count($managers) . ' projects=' . count($projects) . ' line_projects=' . count($linesByProject));
+        $stats = $summary['per_company'][$company];
+        error_log('elpis.nightly fetch company="' . $company . '"'
+            . ' project_rows=' . $stats['project_rows']
+            . ' projects_with_manager=' . $stats['projects']
+            . ' project_managers=' . $stats['project_managers']
+            . ' managers=' . $stats['managers']
+            . ' line_projects=' . $stats['line_projects']
+            . ' lines=' . $stats['lines']
+            . ' fetch_errors=' . $stats['fetch_errors']);
         foreach ($linesByProject as $projectNo => $lines) {
             elpis_write_project_cache($company, (string) $projectNo, is_array($lines) ? $lines : []);
         }

@@ -775,25 +775,52 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
             }
         }
         $emails = elpis_fetch_user_emails((string) $company, array_values($managers), ELPI_NIGHTLY_MAX_AGE);
-        $perCompany[(string) $company] = ['managers' => count($managers), 'recipients' => count(array_filter($emails)), 'sent' => 0, 'empty' => 0];
+        $perCompany[(string) $company] = [
+            'projects' => count($projects),
+            'line_projects' => count($linesByProject),
+            'managers' => count($managers),
+            'recipients' => count(array_filter($emails)),
+            'no_email' => 0,
+            'schedule' => 0,
+            'lines' => 0,
+            'lines_excluded' => 0,
+            'lines_matched' => 0,
+            'receipt_states' => [],
+            'sent' => 0,
+            'failed' => 0,
+            'empty' => 0,
+        ];
+        $stats = &$perCompany[(string) $company];
 
         foreach ($managers as $manager) {
             $intended = $emails[$manager] ?? '';
             $prefs = $intended !== '' ? elpis_mail_prefs_for_email($intended) : elpis_default_mail_prefs();
+            if ($intended === '') {
+                $stats['no_email']++;
+            }
             if (!elpis_mail_should_send_on($prefs, $today)) {
+                $stats['schedule']++;
                 $skipped++;
                 $details[] = ['company' => (string) $company, 'manager' => $manager, 'status' => 'schedule'];
                 continue;
             }
 
+            $excludedItemNos = (array) ($config['excluded_item_nos'] ?? []);
+            $allRows = elpis_digest_rows_for_manager($projects, $linesByProject, $manager);
+            $kept = elpis_digest_rows_for_manager($projects, $linesByProject, $manager, $excludedItemNos);
+            $stats['lines'] += count($allRows);
+            $stats['lines_excluded'] += count($allRows) - count($kept);
             $matched = [];
-            foreach (elpis_digest_rows_for_manager($projects, $linesByProject, $manager, (array) ($config['excluded_item_nos'] ?? [])) as $line) {
+            foreach ($kept as $line) {
+                $state = (string) ($line['receipt_state'] ?? '');
+                $stats['receipt_states'][$state === '' ? '-' : $state] = ($stats['receipt_states'][$state === '' ? '-' : $state] ?? 0) + 1;
                 if (elpis_mail_line_matches_content($line, $prefs['content'])) {
                     $matched[] = $line;
                 }
             }
+            $stats['lines_matched'] += count($matched);
             if ($matched === []) {
-                $perCompany[(string) $company]['empty']++;
+                $stats['empty']++;
                 $skipped++;
                 $details[] = ['company' => (string) $company, 'manager' => $manager, 'status' => 'empty'];
                 continue;
@@ -809,7 +836,9 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
             $ok = elpis_mail_send($recipient, $subject, $plain, $html);
             if ($ok) {
                 $sent++;
-                $perCompany[(string) $company]['sent']++;
+                $stats['sent']++;
+            } else {
+                $stats['failed']++;
             }
             $details[] = [
                 'company' => (string) $company,
@@ -820,6 +849,26 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
                 'lines' => count($matched),
             ];
         }
+        unset($stats);
+        $s = $perCompany[(string) $company];
+        $states = [];
+        foreach ($s['receipt_states'] as $state => $count) {
+            $states[] = $state . ':' . $count;
+        }
+        error_log('elpis.nightly mail company="' . $company . '"'
+            . ' projects=' . $s['projects']
+            . ' line_projects=' . $s['line_projects']
+            . ' managers=' . $s['managers']
+            . ' recipients=' . $s['recipients']
+            . ' no_email=' . $s['no_email']
+            . ' schedule=' . $s['schedule']
+            . ' lines=' . $s['lines']
+            . ' lines_excluded=' . $s['lines_excluded']
+            . ' lines_matched=' . $s['lines_matched']
+            . ' receipt_states=' . implode(',', $states)
+            . ' empty=' . $s['empty']
+            . ' sent=' . $s['sent']
+            . ' failed=' . $s['failed']);
     }
 
     return [
