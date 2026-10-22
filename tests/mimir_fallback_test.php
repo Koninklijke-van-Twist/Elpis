@@ -729,4 +729,18 @@ if (odata_mimir_circuit_open()) {
     fail('een 404 mag het Mímir-circuit niet openen');
 }
 
+// 400 (bv. "not a valid option" na een taalwissel) opent het circuit ook niet.
+odata_mimir_circuit_reset();
+odata_mimir_or_direct(
+    static function (): array {
+        throw new Exception('Mímir HTTP 400: Artikel is not a valid option');
+    },
+    static function (): array {
+        return [];
+    }
+);
+if (odata_mimir_circuit_open()) {
+    fail('een 400 mag het Mímir-circuit niet openen');
+}
+
 echo "OK\n";

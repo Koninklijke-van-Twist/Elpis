@@ -448,11 +448,13 @@ function odata_mimir_is_failure(Throwable $exception): bool
 }
 
 /**
- * Een fout die alleen dit ene verzoek raakt (HTTP 404) opent het circuit niet.
+ * Een fout die alleen dit ene verzoek raakt (HTTP 400 ongeldige query/optie, 404) opent het circuit niet.
  */
 function odata_mimir_is_scoped_failure(Throwable $exception): bool
 {
-    return strpos($exception->getMessage(), 'Mímir HTTP 404') === 0;
+    $message = $exception->getMessage();
+
+    return strpos($message, 'Mímir HTTP 404') === 0 || strpos($message, 'Mímir HTTP 400') === 0;
 }
 
 function odata_mimir_log_fallback(Throwable $exception): void
@@ -643,7 +645,7 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
     if ($code < 200 || $code >= 300) {
         $message = is_array($decoded) ? (string) ($decoded['error'] ?? $raw) : $raw;
         $exception = new Exception('Mímir HTTP ' . $code . ': ' . $message);
-        if ($code === 404) {
+        if ($code === 400 || $code === 404) {
             // 404 hoort bij één company/tabel (bv. een bedrijf dat Mímir niet kent). Niet het
             // hele proces op direct-BC zetten, anders vallen de andere bedrijven stil weg.
             throw $exception;

@@ -1130,7 +1130,66 @@ function elpis_fetch_projects_for_manager(string $company, string $projectManage
 
 function elpis_planning_line_type_filter(): string
 {
-    return "Type eq '" . ELPI_ITEM_LINE_TYPE . "'";
+    // Geen Type-filter in OData meer: de geldige optietekst hangt af van de taal van de
+    // BC-gebruiker ('Artikel' in NL, 'Item' in EN) en een ongeldige optie laat de hele query
+    // falen. elpis_row_is_item_type() filtert client-side.
+    return '';
+}
+
+/**
+ * Normaliseert een BC-optiewaarde/caption: hoofdletters, zonder nummer-prefix ("02 IN PROGRESS"
+ * -> "IN PROGRESS"), underscores en dubbele spaties.
+ */
+function elpis_normalize_option_value(string $value): string
+{
+    $value = strtoupper(trim(str_replace(['_', '-'], ' ', $value)));
+    $value = (string) preg_replace('/\s+/', ' ', $value);
+
+    return $value;
+}
+
+function elpis_option_without_prefix(string $value): string
+{
+    return trim((string) preg_replace('/^\d+\s+/', '', elpis_normalize_option_value($value)));
+}
+
+/**
+ * Taalonafhankelijke vergelijking met een lijst bekende captions (NL/EN/DE) of nummer-prefixen.
+ *
+ * @param list<string> $candidates
+ */
+function elpis_option_matches(string $value, array $candidates): bool
+{
+    $full = elpis_normalize_option_value($value);
+    if ($full === '') {
+        return false;
+    }
+    $bare = elpis_option_without_prefix($value);
+    foreach ($candidates as $candidate) {
+        $c = elpis_normalize_option_value((string) $candidate);
+        if ($c === '') {
+            continue;
+        }
+        if ($c === $full || $c === $bare || elpis_option_without_prefix((string) $candidate) === $bare) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/** Planningsregel-Type "Artikel" in NL, "Item" in EN, "Artikel" in DE; ook optienummer 1. */
+function elpis_row_is_item_type(array $row): bool
+{
+    if (!array_key_exists('Type', $row)) {
+        return true;
+    }
+    $type = trim((string) $row['Type']);
+    if ($type === '') {
+        return true;
+    }
+
+    return $type === '1' || elpis_option_matches($type, [ELPI_ITEM_LINE_TYPE, 'Item', 'Artikel']);
 }
 
 /**
@@ -1197,6 +1256,9 @@ function elpis_collect_planning_line_row(array $row, array &$lines): void
         return;
     }
 
+    if (!elpis_row_is_item_type($row)) {
+        return;
+    }
     $normalized = elpis_normalize_planning_line_row($row);
     if ($normalized['item_no'] !== '' || $normalized['description'] !== '') {
         $lines[] = $normalized;
@@ -1384,7 +1446,7 @@ function elpis_enrich_lines_with_inkoop_planning(string $company, array $linesBy
             '$select' => elpis_inkoop_planning_select_fields(),
             '$orderby' => 'Job_No asc,Job_Task_No asc,Line_No asc',
         ], $ttl) as $row) {
-            if (is_array($row)) {
+            if (is_array($row) && elpis_row_is_item_type($row)) {
                 $rows[] = $row;
             }
         }
@@ -1608,7 +1670,7 @@ function elpis_reservation_status_matches(string $status): bool
 {
     $status = trim($status);
 
-    return $status === ELPI_RESERVATION_STATUS_OPTION || $status === 'Reservering';
+    return elpis_option_matches($status, [ELPI_RESERVATION_STATUS_OPTION, 'Reservering', 'Reservierung']);
 }
 
 function elpis_purchase_line_select_fields(): string
@@ -2362,15 +2424,17 @@ function elpis_closed_work_order_statuses(): array
         // Nederlands
         'AFGESLOTEN', 'GECONTROLEERD', 'GEANNULEERD', 'GEFACTUREERD', 'UITGEVOERD',
         // Engels (andere bedrijven)
-        'COMPLETED', 'CHECKED', 'CLOSED', 'CANCELLED', 'INVOICED', 'EXECUTED', 'PERFORMED',
+        'COMPLETED', 'CHECKED', 'CLOSED', 'CANCELLED', 'CANCELED', 'INVOICED', 'EXECUTED', 'PERFORMED', 'FINISHED',
+        // Duits
+        'ABGESCHLOSSEN', 'GEPRUEFT', 'GEPRÜFT', 'STORNIERT', 'FAKTURIERT', 'AUSGEFUEHRT', 'AUSGEFÜHRT',
     ];
 }
 
 function elpis_line_work_order_closed(array $line): bool
 {
-    $status = strtoupper(trim((string) ($line['work_order_status'] ?? '')));
+    $status = (string) ($line['work_order_status'] ?? '');
 
-    return $status !== '' && in_array($status, elpis_closed_work_order_statuses(), true);
+    return elpis_option_matches($status, elpis_closed_work_order_statuses());
 }
 
 function elpis_fetch_work_orders(string $company, array $workOrderNos, int $ttl = ELPI_CACHE_TTL): array
