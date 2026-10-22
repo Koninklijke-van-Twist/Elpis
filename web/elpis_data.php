@@ -2343,14 +2343,19 @@ function elpis_fetch_item_ledger_receipts(string $company, array $projectNos, in
 
 function elpis_work_order_select_fields(): string
 {
-    // Status op AppWerkorders: veldnaam nog te bevestigen door Ariadne.
+    // AppWerkorders.Status (bevestigd door Ariadne), Nederlandse waarden.
     return 'No,Task_Description,Status';
 }
 
 /** Werkorderstatussen waarvan de regels niet meer in de PM-mail horen. */
 function elpis_closed_work_order_statuses(): array
 {
-    return ['COMPLETED', 'CHECKED', 'CLOSED', 'CANCELLED'];
+    return [
+        // Nederlands
+        'AFGESLOTEN', 'GECONTROLEERD', 'GEANNULEERD', 'GEFACTUREERD',
+        // Engels (andere bedrijven)
+        'COMPLETED', 'CHECKED', 'CLOSED', 'CANCELLED', 'INVOICED',
+    ];
 }
 
 function elpis_line_work_order_closed(array $line): bool

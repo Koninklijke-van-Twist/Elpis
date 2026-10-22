@@ -70,13 +70,16 @@ foreach (['M', 'G'] as $status) {
         fail("$status hoort niet in de mail");
     }
 }
-foreach (['Completed', 'Checked', 'Closed', 'Cancelled'] as $status) {
+foreach (['Afgesloten', 'Gecontroleerd', 'Geannuleerd', 'Gefactureerd', ' afgesloten ', 'GECONTROLEERD',
+    'Completed', 'Checked', 'Closed', 'Cancelled', 'Invoiced', ' closed '] as $status) {
     if (!elpis_mail_line_excluded(line(['work_order_status' => $status]))) {
         fail("werkorder $status hoort niet in de mail");
     }
 }
-if (elpis_mail_line_excluded(line(['work_order_status' => 'Planned']))) {
-    fail('werkorder Planned blijft');
+foreach (['Open', 'Gepland', 'Uitgevoerd', 'Onderhanden', 'Ondertekend', 'Planned', ''] as $status) {
+    if (elpis_mail_line_excluded(line(['work_order_status' => $status]))) {
+        fail("werkorder $status blijft");
+    }
 }
 if (!elpis_mail_line_excluded(line(['item_no' => 'uur']), ['UUR']) || elpis_mail_line_excluded(line(['item_no' => 'UUR']))) {
     fail('uitsluitlijst werkt alleen als hij gevuld is');
