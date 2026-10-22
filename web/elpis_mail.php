@@ -467,12 +467,29 @@ function elpis_mail_send(string $to, string $subject, string $plain, string $htm
     return @mail($to, $encodedSubject, $body, $headers);
 }
 
-/** Openstaand aantal van de regel: LVS_Outstanding_Qty_Base, anders PurchaseLines.Outstanding_Quantity. */
+/**
+ * Openstaand aantal van de regel. Met gekoppelde inkoopregel:
+ * PurchaseLines.Outstanding_Quantity. Zonder gekoppelde inkoopregel:
+ * LVS_Outstanding_Qty_Base van de werkorderregel.
+ */
 function elpis_mail_line_outstanding_qty(array $line): ?float
 {
-    foreach (['inkoop_outstanding_qty', 'purchase_outstanding_qty'] as $key) {
-        if (array_key_exists($key, $line) && $line[$key] !== null && $line[$key] !== '') {
+    $value = static function (array $line, string $key): ?float {
+        if (array_key_exists($key, $line) && $line[$key] !== null && $line[$key] !== '' && is_numeric($line[$key])) {
             return (float) $line[$key];
+        }
+
+        return null;
+    };
+
+    $purchase = $value($line, 'purchase_outstanding_qty');
+    if ($purchase !== null) {
+        return $purchase;
+    }
+    foreach (['inkoop_outstanding_qty', 'LVS_Outstanding_Qty_Base'] as $key) {
+        $lvs = $value($line, $key);
+        if ($lvs !== null) {
+            return $lvs;
         }
     }
 
@@ -481,7 +498,7 @@ function elpis_mail_line_outstanding_qty(array $line): ?float
 
 /**
  * Regels die niet in de PM-mail horen: materiaalstatus V met openstaand 0, M of G,
- * werkorder Completed/Checked/Closed/Cancelled, of artikel op de uitsluitlijst
+ * werkorder afgesloten/gecontroleerd/geannuleerd/gefactureerd/uitgevoerd, of artikel op de uitsluitlijst
  * (excluded_item_nos in data/mail_config.json, standaard leeg).
  */
 function elpis_mail_line_excluded(array $line, array $excludedItemNos = []): bool

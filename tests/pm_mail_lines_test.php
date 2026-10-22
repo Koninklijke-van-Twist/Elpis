@@ -71,12 +71,13 @@ foreach (['M', 'G'] as $status) {
     }
 }
 foreach (['Afgesloten', 'Gecontroleerd', 'Geannuleerd', 'Gefactureerd', ' afgesloten ', 'GECONTROLEERD',
-    'Completed', 'Checked', 'Closed', 'Cancelled', 'Invoiced', ' closed '] as $status) {
+    'Completed', 'Checked', 'Closed', 'Cancelled', 'Invoiced', ' closed ',
+    'Uitgevoerd', ' uitgevoerd ', 'Executed', 'PERFORMED'] as $status) {
     if (!elpis_mail_line_excluded(line(['work_order_status' => $status]))) {
         fail("werkorder $status hoort niet in de mail");
     }
 }
-foreach (['Open', 'Gepland', 'Uitgevoerd', 'Onderhanden', 'Ondertekend', 'Planned', ''] as $status) {
+foreach (['Open', 'Gepland', 'Onderhanden', 'Ondertekend', 'Planned', ''] as $status) {
     if (elpis_mail_line_excluded(line(['work_order_status' => $status]))) {
         fail("werkorder $status blijft");
     }
@@ -90,6 +91,47 @@ if (elpis_line_is_late($n) || ($n['receipt_state'] ?? '') === 'late') {
 }
 if (elpis_material_status_label('M') !== 'Pick aangemaakt') {
     fail('M staat in de statuslijst');
+}
+
+// Ronde 3: openstaand zonder gekoppelde inkoopregel = LVS_Outstanding_Qty_Base (PRJ5260160 / WO2600161).
+$v = line(['material_status' => 'V', 'work_order_no' => 'WO2600161', 'inkoop_outstanding_qty' => 0.0]);
+if (elpis_mail_line_outstanding_qty($v) !== 0.0 || !elpis_mail_line_excluded($v)) {
+    fail('V zonder inkoopregel met LVS openstaand 0 hoort niet in de mail');
+}
+if (!elpis_mail_line_excluded(line(['material_status' => 'V', 'LVS_Outstanding_Qty_Base' => '0']))) {
+    fail('ruwe LVS_Outstanding_Qty_Base 0 telt ook');
+}
+if (elpis_mail_line_outstanding_qty(line(['inkoop_outstanding_qty' => 0.0, 'purchase_outstanding_qty' => 3.0])) !== 3.0) {
+    fail('gekoppelde inkoopregel gaat voor LVS');
+}
+if (elpis_mail_line_excluded(line(['material_status' => 'V', 'inkoop_outstanding_qty' => 0.0, 'purchase_outstanding_qty' => 3.0]))) {
+    fail('V met openstaande inkoopregel blijft');
+}
+if (elpis_mail_line_outstanding_qty(line()) !== null || elpis_mail_line_excluded(line(['material_status' => 'V']))) {
+    fail('onbekend openstaand sluit niet uit');
+}
+
+// Ronde 3: meerdere reserveringen -> altijd de laatste PO-datum, ongeacht volgorde.
+$mkSupply = static fn(string $po, int $ln) => array_merge($purchaseSupply, ['Source_ID' => $po, 'Source_Ref_No' => $ln]);
+$mkPl = static fn(string $po, int $ln, string $d) => array_merge($purchaseLine, ['Document_No' => $po, 'Line_No' => $ln, 'Expected_Receipt_Date' => $d]);
+$supplies = [$mkSupply('PO1', 10000), $mkSupply('PO2', 20000), $mkSupply('PO3', 30000)];
+$pls = [$mkPl('PO1', 10000, '2026-11-05'), $mkPl('PO2', 20000, '2026-12-20'), $mkPl('PO3', 30000, '2026-11-30')];
+foreach ([[0, 1, 2], [2, 1, 0], [1, 0, 2], [2, 0, 1]] as $order) {
+    $res = [$demand];
+    foreach ($order as $i) { $res[] = $supplies[$i]; }
+    $plOrdered = array_reverse($pls);
+    $out = elpis_apply_receipt_expectations(['P' => [line()]], $res, $order[0] === 0 ? $pls : $plOrdered, []);
+    if (($out['P'][0]['expected_receipt_date'] ?? '') !== '2026-12-20') {
+        fail('laatste PO-datum verwacht bij volgorde ' . implode(',', $order) . ': ' . json_encode($out['P'][0]['expected_receipt_date'] ?? null));
+    }
+}
+// Gekoppelde inkoopregel met vroege datum + reservering met latere datum -> laatste.
+$out = elpis_apply_receipt_expectations(
+    ['P' => [line(['purchase_order_no' => 'PO1', 'purchase_order_line_no' => 10000, 'work_order_no' => 'WO1'])]],
+    [$demand, $mkSupply('PO2', 20000)], $pls, []
+);
+if (($out['P'][0]['expected_receipt_date'] ?? '') !== '2026-12-20') {
+    fail('PO-datum + latere reservering geeft laatste: ' . json_encode($out['P'][0]['expected_receipt_date'] ?? null));
 }
 
 echo "OK\n";
