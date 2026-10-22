@@ -354,4 +354,18 @@ if (($busy['status'] ?? '') !== 'running') {
     fail('een bezette lock start geen tweede nightly: ' . json_encode($busy));
 }
 
+// Nightly haalt live op (Mímir max_age 0), zodat een tijdelijk lege Mímir-cache niet blijft hangen.
+$GLOBALS['ELPIS_LIVE_FETCH'] = false;
+$liveSeen = null;
+elpis_nightly_warm_live(static function () use (&$liveSeen): array {
+    $liveSeen = !empty($GLOBALS['ELPIS_LIVE_FETCH']);
+    return ['by_company' => []];
+});
+if ($liveSeen !== true) {
+    fail('nightly moet live ophalen (ELPIS_LIVE_FETCH)');
+}
+if (!empty($GLOBALS['ELPIS_LIVE_FETCH'])) {
+    fail('nightly zet ELPIS_LIVE_FETCH na afloop terug');
+}
+
 echo "OK\n";
