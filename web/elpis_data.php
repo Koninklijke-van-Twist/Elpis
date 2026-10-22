@@ -257,7 +257,15 @@ function elpis_fetch_rows(string $company, string $entitySet, array $query, int 
         $ttlForMimir = !empty($GLOBALS['ELPIS_LIVE_FETCH']) ? 0 : ($ttl === 0 ? 3600 : $ttl);
         $rows = odata_mimir_or_direct(
             static function () use ($company, $entitySet, $query, $ttlForMimir): array {
-                return odata_mimir_query_impl($company, $entitySet, $query, $ttlForMimir);
+                $rows = odata_mimir_query_impl($company, $entitySet, $query, $ttlForMimir);
+                if ($rows === [] && $ttlForMimir > 0 && !empty($GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'])) {
+                    // Leeg uit de Mímir-cache is verdacht in de nightly: één keer live opnieuw.
+                    $rows = odata_mimir_query_impl($company, $entitySet, $query, 0);
+                    error_log('elpis.nightly empty-retry company=' . $company . ' entity=' . $entitySet
+                        . ' filter="' . (string) ($query['$filter'] ?? '') . '" live_rows=' . count($rows));
+                }
+
+                return $rows;
             },
             static function () use ($company, $entitySet, $query, $ttl): array {
                 return elpis_fetch_rows_direct($company, $entitySet, $query, $ttl);

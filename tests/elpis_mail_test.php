@@ -354,18 +354,18 @@ if (($busy['status'] ?? '') !== 'running') {
     fail('een bezette lock start geen tweede nightly: ' . json_encode($busy));
 }
 
-// Nightly haalt live op (Mímir max_age 0), zodat een tijdelijk lege Mímir-cache niet blijft hangen.
-$GLOBALS['ELPIS_LIVE_FETCH'] = false;
-$liveSeen = null;
-elpis_nightly_warm_live(static function () use (&$liveSeen): array {
-    $liveSeen = !empty($GLOBALS['ELPIS_LIVE_FETCH']);
+// Nightly zet de lege-resultaat-retry aan (max_age blijft 14400), en daarna weer uit.
+$GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'] = false;
+$retrySeen = null;
+elpis_nightly_warm_live(static function () use (&$retrySeen): array {
+    $retrySeen = !empty($GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY']) && empty($GLOBALS['ELPIS_LIVE_FETCH']);
     return ['by_company' => []];
 });
-if ($liveSeen !== true) {
-    fail('nightly moet live ophalen (ELPIS_LIVE_FETCH)');
+if ($retrySeen !== true) {
+    fail('nightly moet de lege-retry aanzetten zonder volledig live te gaan');
 }
-if (!empty($GLOBALS['ELPIS_LIVE_FETCH'])) {
-    fail('nightly zet ELPIS_LIVE_FETCH na afloop terug');
+if (!empty($GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'])) {
+    fail('nightly zet ELPIS_NIGHTLY_RETRY_EMPTY na afloop terug');
 }
 
 echo "OK\n";
