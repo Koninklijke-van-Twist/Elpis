@@ -590,6 +590,24 @@ function odata_bc_url_from_odata_url(string $url): string
     return $rebuilt;
 }
 
+/** Aantal pogingen bij een Mímir HTTP 5xx voordat het circuit opengaat. */
+function odata_mimir_transient_attempts(): int
+{
+    $configured = $GLOBALS['ELPIS_MIMIR_ATTEMPTS'] ?? 3;
+
+    return max(1, (int) $configured);
+}
+
+function odata_mimir_retry_sleep(int $attempt): void
+{
+    $sleeper = $GLOBALS['ELPIS_MIMIR_RETRY_SLEEP'] ?? null;
+    if (is_callable($sleeper)) {
+        $sleeper($attempt);
+        return;
+    }
+    usleep(min(10, 2 * $attempt) * 1000000);
+}
+
 function odata_mimir_request(string $method, string $path, ?array $jsonBody = null): array
 {
     $apiKey = odata_mimir_api_key();
@@ -632,13 +650,30 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
         $opts[CURLOPT_POSTFIELDS] = $payload;
     }
     curl_setopt_array($ch, $opts);
-    $raw = curl_exec($ch);
-    if ($raw === false) {
-        $err = curl_error($ch);
-        curl_close($ch);
-        odata_mimir_fail(new Exception('Mímir cURL error: ' . $err));
+    $attempts = odata_mimir_transient_attempts();
+    for ($attempt = 1; ; $attempt++) {
+        $transport = $GLOBALS['ELPIS_MIMIR_TRANSPORT'] ?? null;
+        if (is_callable($transport)) {
+            [$code, $raw] = $transport($method, $url, $jsonBody);
+            $code = (int) $code;
+        } else {
+            $raw = curl_exec($ch);
+            if ($raw === false) {
+                $err = curl_error($ch);
+                curl_close($ch);
+                odata_mimir_fail(new Exception('Mímir cURL error: ' . $err));
+            }
+            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        }
+        // Een losse 5xx (bv. BC-slots vol bij gelijktijdige runs) is meestal tijdelijk. Zonder retry
+        // opent die ene fout het circuit en gaat de rest van het verzoek (alle volgende bedrijven)
+        // via de directe BC-route, of wordt een stille lege set.
+        if ($code < 500 || $attempt >= $attempts) {
+            break;
+        }
+        error_log('[Elpis] Mímir HTTP ' . $code . ' op ' . $path . ', poging ' . $attempt . '/' . $attempts . ', opnieuw.');
+        odata_mimir_retry_sleep($attempt);
     }
-    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
     $decoded = json_decode($raw, true);
