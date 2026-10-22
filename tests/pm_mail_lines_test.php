@@ -134,4 +134,26 @@ if (($out['P'][0]['expected_receipt_date'] ?? '') !== '2026-12-20') {
     fail('PO-datum + latere reservering geeft laatste: ' . json_encode($out['P'][0]['expected_receipt_date'] ?? null));
 }
 
+// AppProjecten zonder Project_Manager-filter in de query; lege managers vallen client-side weg.
+$projectsSeen = elpis_collect_projects_from_rows([
+    ['No' => 'P1', 'Description' => 'A', 'Project_Manager' => 'KVT\\AVERHAGEN'],
+    ['No' => 'P2', 'Description' => 'B', 'Project_Manager' => ''],
+    ['No' => 'P3', 'Description' => 'C', 'Project_Manager' => 'fstal'],
+]);
+if (count($projectsSeen) !== 2 || $projectsSeen[0]['project_manager'] !== 'KVT\\AVERHAGEN' || $projectsSeen[1]['project_manager'] !== 'KVT\\FSTAL') {
+    fail('projecten zonder manager vallen weg en KVT\\-prefix blijft: ' . json_encode($projectsSeen));
+}
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entitySet, array $query): ?array {
+    if ($entitySet === 'AppProjecten' && isset($query['$filter'])) {
+        fail('AppProjecten-query hoort geen $filter te hebben');
+    }
+    return $entitySet === 'AppProjecten' ? [['No' => 'X1', 'Project_Manager' => 'KVT\\MHUBREGTSE'], ['No' => 'X2', 'Project_Manager' => '']] : null;
+};
+elpis_reset_fetch_memo();
+if (elpis_fetch_project_managers('Hunter van Twist', 60) !== ['KVT\\MHUBREGTSE'] || count(elpis_fetch_projects_for_company('Hunter van Twist', 60)) !== 1) {
+    fail('managers/projecten uit ongefilterde AppProjecten');
+}
+unset($GLOBALS['ELPIS_FETCH_OBSERVER']);
+elpis_reset_fetch_memo();
+
 echo "OK\n";

@@ -1057,8 +1057,8 @@ function elpis_fetch_project_managers(string $company, int $ttl = ELPI_PROJECT_M
 {
     $rows = elpis_try_fetch_rows($company, 'AppProjecten', [
         '$select' => 'Project_Manager',
-        '$filter' => "Project_Manager ne ''",
-        '$top' => '500',
+        // Geen "Project_Manager ne ''" in de query: Mímir geeft daarop sinds de taalwissel van
+        // POWERBISERV (22-10-2026) 200 met een lege set. Lege managers vallen client-side weg.
     ], $ttl);
 
     $managers = [];
@@ -1087,7 +1087,7 @@ function elpis_collect_projects_from_rows(array $rows): array
             continue;
         }
         $normalized = elpis_normalize_project_row($row);
-        if ($normalized['no'] !== '') {
+        if ($normalized['no'] !== '' && $normalized['project_manager'] !== '') {
             $projects[] = $normalized;
         }
     }
@@ -1099,9 +1099,9 @@ function elpis_fetch_projects_for_company(string $company, int $ttl = ELPI_CACHE
 {
     $rows = elpis_try_fetch_rows($company, 'AppProjecten', [
         '$select' => 'No,Description,Project_Manager',
-        '$filter' => "Project_Manager ne ''",
+        // Geen "Project_Manager ne ''" in de query: Mímir geeft daarop sinds de taalwissel van
+        // POWERBISERV (22-10-2026) 200 met een lege set. Lege managers vallen client-side weg.
         '$orderby' => 'No desc',
-        '$top' => '500',
     ], $ttl);
 
     return elpis_collect_projects_from_rows($rows);
