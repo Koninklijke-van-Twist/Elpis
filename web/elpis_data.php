@@ -2352,9 +2352,9 @@ function elpis_closed_work_order_statuses(): array
 {
     return [
         // Nederlands
-        'AFGESLOTEN', 'GECONTROLEERD', 'GEANNULEERD', 'GEFACTUREERD',
+        'AFGESLOTEN', 'GECONTROLEERD', 'GEANNULEERD', 'GEFACTUREERD', 'UITGEVOERD',
         // Engels (andere bedrijven)
-        'COMPLETED', 'CHECKED', 'CLOSED', 'CANCELLED', 'INVOICED',
+        'COMPLETED', 'CHECKED', 'CLOSED', 'CANCELLED', 'INVOICED', 'EXECUTED', 'PERFORMED',
     ];
 }
 
@@ -2711,7 +2711,14 @@ function elpis_apply_line_reservations(
         }
     }
 
-    if ($purchaseDates !== [] && elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? '')) === '') {
+    // Meerdere reserveringen/PO's: altijd de LAATSTE datum (worst case), ook als
+    // de gekoppelde PurchaseLines-regel al een (vroegere) datum gaf. KVT blijft leidend.
+    $current = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
+    $fromKvt = $current !== '' && str_starts_with((string) ($line['expected_receipt_source'] ?? ''), 'WerkordersLines');
+    if ($purchaseDates !== [] && !$fromKvt) {
+        if ($current !== '') {
+            $purchaseDates[] = $current;
+        }
         $line['expected_receipt_date'] = elpis_latest_date($purchaseDates);
         $line['expected_receipt_source'] = 'ReservationEntries -> PurchaseLines -> Expected_Receipt_Date';
     }
