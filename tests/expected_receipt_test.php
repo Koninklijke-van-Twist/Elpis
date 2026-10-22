@@ -169,8 +169,46 @@ if (array_key_exists('completely_received', $ignoredPurchaseFlag)) {
 }
 
 $jobFilters = elpis_job_scoped_filters(array_map(static fn (int $i): string => 'P' . $i, range(1, 13)));
-if (count($jobFilters) !== 2 || !str_contains($jobFilters[0], "Type eq 'Artikel'") || filter_ors_cross_fields($jobFilters[0])) {
-    fail('planningsregels blijven in chunks van 12 op Job_No');
+if (count($jobFilters) !== 2 || str_contains($jobFilters[0], 'Type eq') || filter_ors_cross_fields($jobFilters[0])) {
+    fail('planningsregels blijven in chunks van 12 op Job_No, zonder taalafhankelijk Type-filter');
+}
+
+// Taalonafhankelijke optiewaarden (BC-gebruiker NL of EN).
+foreach (['Artikel', 'Item', 'item', 'ITEM', '1'] as $type) {
+    if (!elpis_row_is_item_type(['Type' => $type])) {
+        fail('Type ' . $type . ' moet als artikelregel tellen');
+    }
+}
+foreach (['Resource', 'Resource', 'Middel', 'G/L Account', 'Grootboekrekening', 'Text'] as $type) {
+    if (elpis_row_is_item_type(['Type' => $type])) {
+        fail('Type ' . $type . ' is geen artikelregel');
+    }
+}
+$lines = [];
+elpis_collect_planning_line_row(['Job_No' => 'P1', 'Type' => 'Resource', 'No' => 'R1', 'Description' => 'Uren'], $lines);
+if ($lines !== []) {
+    fail('resource-regels vallen client-side weg');
+}
+foreach (['Reservation', 'Reservering', 'reservation', 'Reservierung'] as $status) {
+    if (!elpis_reservation_status_matches($status)) {
+        fail('reserveringsstatus ' . $status . ' moet matchen');
+    }
+}
+if (elpis_reservation_status_matches('Surplus')) {
+    fail('Surplus is geen reservering');
+}
+foreach (['Uitgevoerd', 'COMPLETED', 'Completed', '05 Completed', 'Closed', 'Afgesloten', 'Abgeschlossen'] as $status) {
+    if (!elpis_line_work_order_closed(['work_order_status' => $status])) {
+        fail('werkorderstatus ' . $status . ' moet gesloten zijn');
+    }
+}
+foreach (['02 IN PROGRESS', 'In Progress', 'Onderhanden', 'Open', ''] as $status) {
+    if (elpis_line_work_order_closed(['work_order_status' => $status])) {
+        fail('werkorderstatus ' . $status . ' is niet gesloten');
+    }
+}
+if (!elpis_option_matches('02 IN PROGRESS', ['In Progress']) || !elpis_option_matches('in_progress', ['IN PROGRESS'])) {
+    fail('nummer-prefix en underscores horen genegeerd te worden');
 }
 
 $normalized = elpis_normalize_planning_line_row([
