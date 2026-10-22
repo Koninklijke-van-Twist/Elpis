@@ -24,6 +24,7 @@ function elpis_mail_config(): array
     $defaults = [
         'test_mode' => true,
         'test_recipient' => 'tfalken@kvt.nl',
+        'excluded_item_nos' => [],
     ];
     $path = elpis_mail_config_path();
     if (!is_file($path)) {
@@ -42,9 +43,18 @@ function elpis_mail_config(): array
         $recipient = $defaults['test_recipient'];
     }
 
+    $excluded = [];
+    foreach (is_array($decoded['excluded_item_nos'] ?? null) ? $decoded['excluded_item_nos'] : [] as $itemNo) {
+        $itemNo = strtoupper(trim((string) $itemNo));
+        if ($itemNo !== '') {
+            $excluded[$itemNo] = $itemNo;
+        }
+    }
+
     return [
         'test_mode' => array_key_exists('test_mode', $decoded) ? (bool) $decoded['test_mode'] : true,
         'test_recipient' => $recipient,
+        'excluded_item_nos' => array_values($excluded),
     ];
 }
 
@@ -457,7 +467,43 @@ function elpis_mail_send(string $to, string $subject, string $plain, string $htm
     return @mail($to, $encodedSubject, $body, $headers);
 }
 
-function elpis_digest_rows_for_manager(array $projects, array $linesByProject, string $manager): array
+/** Openstaand aantal van de regel: LVS_Outstanding_Qty_Base, anders PurchaseLines.Outstanding_Quantity. */
+function elpis_mail_line_outstanding_qty(array $line): ?float
+{
+    foreach (['inkoop_outstanding_qty', 'purchase_outstanding_qty'] as $key) {
+        if (array_key_exists($key, $line) && $line[$key] !== null && $line[$key] !== '') {
+            return (float) $line[$key];
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Regels die niet in de PM-mail horen: materiaalstatus V met openstaand 0, M of G,
+ * werkorder Completed/Checked/Closed/Cancelled, of artikel op de uitsluitlijst
+ * (excluded_item_nos in data/mail_config.json, standaard leeg).
+ */
+function elpis_mail_line_excluded(array $line, array $excludedItemNos = []): bool
+{
+    $status = strtoupper(trim((string) ($line['material_status'] ?? '')));
+    $outstanding = elpis_mail_line_outstanding_qty($line);
+    if ($status === 'V' && $outstanding !== null && $outstanding <= 0.00001) {
+        return true;
+    }
+    // Ariadne: M = pick aangemaakt, G = volledig gepickt. Niet meer te bestellen.
+    if ($status === 'M' || $status === 'G') {
+        return true;
+    }
+    if (elpis_line_work_order_closed($line)) {
+        return true;
+    }
+    $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
+
+    return $item !== '' && in_array($item, $excludedItemNos, true);
+}
+
+function elpis_digest_rows_for_manager(array $projects, array $linesByProject, string $manager, array $excludedItemNos = []): array
 {
     $manager = elpis_normalize_bc_username($manager);
     $rows = [];
@@ -473,9 +519,12 @@ function elpis_digest_rows_for_manager(array $projects, array $linesByProject, s
             if (!is_array($line)) {
                 continue;
             }
+            if (elpis_mail_line_excluded($line, $excludedItemNos)) {
+                continue;
+            }
             $line['project_no'] = $projectNo;
             $line['project_description'] = (string) ($project['description'] ?? '');
-            $rows[] = $line;
+            $rows[] = elpis_refresh_receipt_state($line);
         }
     }
 
@@ -719,7 +768,7 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
             }
 
             $matched = [];
-            foreach (elpis_digest_rows_for_manager($projects, $linesByProject, $manager) as $line) {
+            foreach (elpis_digest_rows_for_manager($projects, $linesByProject, $manager, (array) ($config['excluded_item_nos'] ?? [])) as $line) {
                 if (elpis_mail_line_matches_content($line, $prefs['content'])) {
                     $matched[] = $line;
                 }
