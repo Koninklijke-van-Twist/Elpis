@@ -710,4 +710,23 @@ if (strpos(fallback_log(), 'sandbox-secret') !== false || strpos(fallback_log(),
 }
 @unlink($authFile);
 
+// Een 404 (bv. onbekend bedrijf in Mímir) valt terug op BC voor dat verzoek, maar opent het circuit niet.
+odata_mimir_circuit_reset();
+$directCalled = false;
+$scoped = odata_mimir_or_direct(
+    static function (): array {
+        throw new Exception('Mímir HTTP 404: company not found');
+    },
+    static function () use (&$directCalled): array {
+        $directCalled = true;
+        return [['No' => 'DE-1']];
+    }
+);
+if (!$directCalled || ($scoped[0]['No'] ?? '') !== 'DE-1') {
+    fail('404 moet voor dit verzoek op BC terugvallen');
+}
+if (odata_mimir_circuit_open()) {
+    fail('een 404 mag het Mímir-circuit niet openen');
+}
+
 echo "OK\n";

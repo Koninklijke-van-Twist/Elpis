@@ -865,14 +865,14 @@ function elpis_nightly_needs_run(): bool
 }
 
 /**
- * Nachtelijke verversing: altijd live (Mímir max_age 0). Anders kan een tijdelijk lege
- * Mímir-cache (AppProjecten/AppItems/AppWerkorders) uren blijven hangen en worden hele
- * bedrijven stil overgeslagen.
+ * Nachtelijke verversing met max_age 14400 (gedeelde cache). Een leeg Mímir-antwoord wordt
+ * één keer live (max_age 0) opnieuw opgehaald, zodat een tijdelijk lege Mímir-cache geen
+ * hele bedrijven stil overslaat.
  */
 function elpis_nightly_warm_live(?callable $warm = null): array
 {
-    $previous = $GLOBALS['ELPIS_LIVE_FETCH'] ?? false;
-    $GLOBALS['ELPIS_LIVE_FETCH'] = true;
+    $previous = $GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'] ?? false;
+    $GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'] = true;
     elpis_reset_fetch_memo();
     try {
         if ($warm !== null) {
@@ -882,7 +882,7 @@ function elpis_nightly_warm_live(?callable $warm = null): array
 
         return elpis_warm_odata_cache(ELPI_NIGHTLY_MAX_AGE);
     } finally {
-        $GLOBALS['ELPIS_LIVE_FETCH'] = $previous;
+        $GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'] = $previous;
         elpis_reset_fetch_memo();
     }
 }

@@ -447,6 +447,14 @@ function odata_mimir_is_failure(Throwable $exception): bool
         || strpos($message, 'Mímir error:') === 0;
 }
 
+/**
+ * Een fout die alleen dit ene verzoek raakt (HTTP 404) opent het circuit niet.
+ */
+function odata_mimir_is_scoped_failure(Throwable $exception): bool
+{
+    return strpos($exception->getMessage(), 'Mímir HTTP 404') === 0;
+}
+
 function odata_mimir_log_fallback(Throwable $exception): void
 {
     $message = $exception->getMessage();
@@ -504,7 +512,7 @@ function odata_mimir_or_direct(callable $viaMimir, callable $viaDirect)
         if (!odata_mimir_is_failure($exception)) {
             throw $exception;
         }
-        if (!odata_mimir_circuit_open()) {
+        if (!odata_mimir_circuit_open() && !odata_mimir_is_scoped_failure($exception)) {
             odata_mimir_trip($exception);
         }
         if (!odata_bc_credentials_configured()) {
@@ -634,7 +642,13 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
     $decoded = json_decode($raw, true);
     if ($code < 200 || $code >= 300) {
         $message = is_array($decoded) ? (string) ($decoded['error'] ?? $raw) : $raw;
-        odata_mimir_fail(new Exception('Mímir HTTP ' . $code . ': ' . $message));
+        $exception = new Exception('Mímir HTTP ' . $code . ': ' . $message);
+        if ($code === 404) {
+            // 404 hoort bij één company/tabel (bv. een bedrijf dat Mímir niet kent). Niet het
+            // hele proces op direct-BC zetten, anders vallen de andere bedrijven stil weg.
+            throw $exception;
+        }
+        odata_mimir_fail($exception);
     }
     if (!is_array($decoded)) {
         odata_mimir_fail(new Exception('Mímir gaf ongeldige JSON terug.'));
