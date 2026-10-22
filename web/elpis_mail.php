@@ -756,6 +756,7 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
     $sent = 0;
     $skipped = 0;
     $details = [];
+    $perCompany = [];
 
     foreach ($byCompany as $company => $bundle) {
         if (!is_array($bundle)) {
@@ -774,13 +775,14 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
             }
         }
         $emails = elpis_fetch_user_emails((string) $company, array_values($managers), ELPI_NIGHTLY_MAX_AGE);
+        $perCompany[(string) $company] = ['managers' => count($managers), 'recipients' => count(array_filter($emails)), 'sent' => 0, 'empty' => 0];
 
         foreach ($managers as $manager) {
             $intended = $emails[$manager] ?? '';
             $prefs = $intended !== '' ? elpis_mail_prefs_for_email($intended) : elpis_default_mail_prefs();
             if (!elpis_mail_should_send_on($prefs, $today)) {
                 $skipped++;
-                $details[] = ['manager' => $manager, 'status' => 'schedule'];
+                $details[] = ['company' => (string) $company, 'manager' => $manager, 'status' => 'schedule'];
                 continue;
             }
 
@@ -791,13 +793,14 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
                 }
             }
             if ($matched === []) {
+                $perCompany[(string) $company]['empty']++;
                 $skipped++;
-                $details[] = ['manager' => $manager, 'status' => 'empty'];
+                $details[] = ['company' => (string) $company, 'manager' => $manager, 'status' => 'empty'];
                 continue;
             }
             if ($intended === '' && !$testMode) {
                 $skipped++;
-                $details[] = ['manager' => $manager, 'status' => 'no-email'];
+                $details[] = ['company' => (string) $company, 'manager' => $manager, 'status' => 'no-email'];
                 continue;
             }
 
@@ -806,8 +809,10 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
             $ok = elpis_mail_send($recipient, $subject, $plain, $html);
             if ($ok) {
                 $sent++;
+                $perCompany[(string) $company]['sent']++;
             }
             $details[] = [
+                'company' => (string) $company,
                 'manager' => $manager,
                 'status' => $ok ? 'sent' : 'failed',
                 'to' => $recipient,
@@ -821,6 +826,7 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
         'sent' => $sent,
         'skipped' => $skipped,
         'test_mode' => $testMode,
+        'per_company' => $perCompany,
         'details' => $details,
     ];
 }
@@ -873,14 +879,18 @@ function elpis_nightly_warm_live(?callable $warm = null): array
 {
     $previous = $GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'] ?? false;
     $GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'] = true;
+    $GLOBALS['ELPIS_FETCH_ERRORS'] = [];
     elpis_reset_fetch_memo();
     try {
         if ($warm !== null) {
-            return $warm();
+            $summary = $warm();
+        } else {
+            elpis_clear_odata_cache();
+            $summary = elpis_warm_odata_cache(ELPI_NIGHTLY_MAX_AGE);
         }
-        elpis_clear_odata_cache();
+        $summary['fetch_errors'] = array_slice((array) $GLOBALS['ELPIS_FETCH_ERRORS'], 0, 50);
 
-        return elpis_warm_odata_cache(ELPI_NIGHTLY_MAX_AGE);
+        return $summary;
     } finally {
         $GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'] = $previous;
         elpis_reset_fetch_memo();

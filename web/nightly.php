@@ -73,3 +73,18 @@ echo 'mails_sent=' . (int) ($mail['sent'] ?? 0) . "\n";
 echo 'mail_test_mode=' . (!empty($mail['test_mode']) ? '1' : '0') . "\n";
 echo 'ttl=' . ELPI_NIGHTLY_MAX_AGE . "\n";
 echo 'elapsed_s=' . $elapsed . "\n";
+$mailPer = is_array($mail['per_company'] ?? null) ? $mail['per_company'] : [];
+foreach ((is_array($summary['per_company'] ?? null) ? $summary['per_company'] : []) as $companyName => $stats) {
+    $m = is_array($mailPer[$companyName] ?? null) ? $mailPer[$companyName] : [];
+    echo 'company="' . $companyName . '" managers=' . (int) ($stats['managers'] ?? 0)
+        . ' projects=' . (int) ($stats['projects'] ?? 0)
+        . ' line_projects=' . (int) ($stats['line_projects'] ?? 0)
+        . ' lines=' . (int) ($stats['lines'] ?? 0)
+        . ' mail_managers=' . (int) ($m['managers'] ?? 0)
+        . ' recipients=' . (int) ($m['recipients'] ?? 0)
+        . ' empty=' . (int) ($m['empty'] ?? 0)
+        . ' sent=' . (int) ($m['sent'] ?? 0) . "\n";
+}
+foreach ((is_array($summary['fetch_errors'] ?? null) ? $summary['fetch_errors'] : []) as $err) {
+    echo 'fetch_error company="' . (string) ($err['company'] ?? '') . '" entity=' . (string) ($err['entity'] ?? '') . ' message=' . (string) ($err['message'] ?? '') . "\n";
+}
