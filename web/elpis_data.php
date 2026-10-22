@@ -337,6 +337,9 @@ function elpis_try_fetch_rows(string $company, string $entitySet, array $query, 
         elpis_log_timing($company, $entitySet, $query, 0, $startedAt, 'error');
         $message = str_replace(["\n", "\r"], ' ', $error->getMessage());
         error_log('elpis.timing error entity=' . $entitySet . ' message=' . $message);
+        if (isset($GLOBALS['ELPIS_FETCH_ERRORS']) && is_array($GLOBALS['ELPIS_FETCH_ERRORS'])) {
+            $GLOBALS['ELPIS_FETCH_ERRORS'][] = ['company' => $company, 'entity' => $entitySet, 'message' => substr($message, 0, 300)];
+        }
         if ($entitySet === ELPI_PURCHASE_ORDER_LINE_ENTITY) {
             elpis_log_purchase_lines_failure($company, $query, $message);
         }
@@ -3364,6 +3367,7 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
         'purchase_order_lines' => 0,
         'item_inventory' => 0,
         'by_company' => [],
+        'per_company' => [],
     ];
 
     $companies = elpis_companies_for_page($ttl);
@@ -3383,6 +3387,13 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
             'projects' => $projects,
             'lines' => $linesByProject,
         ];
+        $summary['per_company'][$company] = [
+            'managers' => count($managers),
+            'projects' => count($projects),
+            'line_projects' => count($linesByProject),
+            'lines' => array_sum(array_map(static fn ($l): int => is_array($l) ? count($l) : 0, $linesByProject)),
+        ];
+        error_log('elpis.nightly company="' . $company . '" managers=' . count($managers) . ' projects=' . count($projects) . ' line_projects=' . count($linesByProject));
         foreach ($linesByProject as $projectNo => $lines) {
             elpis_write_project_cache($company, (string) $projectNo, is_array($lines) ? $lines : []);
         }
