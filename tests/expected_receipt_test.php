@@ -1294,8 +1294,8 @@ file_put_contents($stalePath, json_encode([
 if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
     fail('projectcache zonder versie wordt genegeerd');
 }
-if (ELPI_PROJECT_CACHE_VERSION !== 10) {
-    fail('projectcacheversie moet 10 zijn zodat een gepickte werkorderregel geen Te bestellen meer toont');
+if (ELPI_PROJECT_CACHE_VERSION < 11) {
+    fail('projectcacheversie moet minstens 11 zijn (oude caches met gepickte regels of stille lege inkoop na Mímir-timeout verversen)');
 }
 $previousVersionPath = elpis_project_cache_path('Koninklijke van Twist', '153390');
 file_put_contents($previousVersionPath, json_encode([
@@ -1671,5 +1671,31 @@ $debugPage = (string) file_get_contents(dirname(__DIR__) . '/web/line_debug.php'
 if (!str_contains($debugPage, 'logincheck.php') || !str_contains($debugPage, 'debug_line') || !str_contains($debugPage, 'Cache-Control: no-store')) {
     fail('line_debug.php moet achter logincheck staan');
 }
+
+// Mímir-timeout op ReservationEntries: fout i.p.v. stil "geen inkoop", en geen projectcache.
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity, array $query): array {
+    if ($entity === ELPI_PLANNING_LINE_ENTITY) {
+        return [['Job_No' => 'PRJ2699001', 'Job_Task_No' => '1000', 'Line_No' => 10000, 'Job_Contract_Entry_No' => 7, 'Type' => 'Artikel', 'No' => 'PK-422/8', 'Description' => 'Filter', 'Quantity' => 2, 'Remaining_Qty' => 2]];
+    }
+    if ($entity === ELPI_RESERVATION_ENTRY_ENTITY) {
+        throw new RuntimeException('Mímir cURL error: Connection timed out');
+    }
+
+    return [];
+};
+elpis_reset_fetch_memo();
+$threw = false;
+try {
+    elpis_load_project_modal_lines('Koninklijke van Twist', 'PRJ2699001', true);
+} catch (RuntimeException $e) {
+    $threw = true;
+}
+if (!$threw) {
+    fail('mislukte ReservationEntries-query moet een fout geven');
+}
+if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ2699001') !== null) {
+    fail('onvolledige uitkomst mag niet in de projectcache');
+}
+unset($GLOBALS['ELPIS_FETCH_OBSERVER']);
 
 echo "OK\n";
