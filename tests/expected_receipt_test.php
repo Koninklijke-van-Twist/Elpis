@@ -1294,7 +1294,7 @@ file_put_contents($stalePath, json_encode([
 if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
     fail('projectcache zonder versie wordt genegeerd');
 }
-if (ELPI_PROJECT_CACHE_VERSION < 13) {
+if (ELPI_PROJECT_CACHE_VERSION < 14) {
     fail('projectcacheversie moet minstens 11 zijn (oude caches met gepickte regels of stille lege inkoop na Mímir-timeout verversen)');
 }
 $previousVersionPath = elpis_project_cache_path('Koninklijke van Twist', '153390');
@@ -1792,4 +1792,18 @@ if (elpis_line_expected_receipt_display($pickRes) === 'Status M, geen ontvangst 
     fail('M met reservering is niet onbewezen');
 }
 unset($GLOBALS['ELPIS_TODAY']);
+
+// PR33: Usage_Link, M-label, deels gedekt
+$row = ['Job_No'=>'P','Line_No'=>1,'No'=>'X','Quantity'=>2,'Remaining_Qty'=>0,'Usage_Link'=>false,'KVT_Status_Material'=>'M'];
+$n = elpis_normalize_planning_line_row($row);
+if ($n['remaining_qty'] !== null || elpis_line_is_received($n)) { echo "FAIL usage_link false remaining\n"; exit(1); }
+if (elpis_line_material_status_label($n) !== 'Status M, geen ontvangst of reservering gevonden') { echo "FAIL M neutral label\n"; exit(1); }
+if (elpis_line_expected_receipt_display($n) !== 'Status M, geen ontvangst of reservering gevonden') { echo "FAIL M neutral display: ".elpis_line_expected_receipt_display($n)."\n"; exit(1); }
+$n2 = elpis_normalize_planning_line_row(['Usage_Link'=>true,'Remaining_Qty'=>0,'Quantity'=>2,'KVT_Status_Material'=>'M','KVT_Qty_in_Whse_Pick'=>2]);
+if ($n2['remaining_qty'] !== 0.0 || elpis_line_material_status_label($n2) !== 'Pick aangemaakt') { echo "FAIL usage_link true / pick\n"; exit(1); }
+if (elpis_line_material_status_label(['material_status'=>'M','kvt_qty_picked'=>1]) !== 'Deels gepickt') { echo "FAIL partial pick\n"; exit(1); }
+if (elpis_line_material_status_label(['material_status'=>'M','completely_picked'=>true]) !== 'Gepicked') { echo "FAIL complete pick\n"; exit(1); }
+$p = ['quantity'=>16,'reserved_qty'=>1,'reserved_purchase_qty'=>0,'reserved_from_stock'=>true,'stock_receipts'=>['PWR2635059'=>'2026-01-01']];
+if (elpis_line_partial_stock_text($p) !== 'Uit voorraad 1 (PWR2635059) · 15 nog te bestellen') { echo "FAIL partial: ".elpis_line_partial_stock_text($p)."\n"; exit(1); }
+if (elpis_line_partial_stock_text(['quantity'=>1]+$p) !== '') { echo "FAIL full cover\n"; exit(1); }
 echo "OK\n";
