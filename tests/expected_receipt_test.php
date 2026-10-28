@@ -1294,7 +1294,7 @@ file_put_contents($stalePath, json_encode([
 if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
     fail('projectcache zonder versie wordt genegeerd');
 }
-if (ELPI_PROJECT_CACHE_VERSION < 12) {
+if (ELPI_PROJECT_CACHE_VERSION < 13) {
     fail('projectcacheversie moet minstens 11 zijn (oude caches met gepickte regels of stille lege inkoop na Mímir-timeout verversen)');
 }
 $previousVersionPath = elpis_project_cache_path('Koninklijke van Twist', '153390');
@@ -1754,7 +1754,7 @@ if (!str_starts_with($stockText, 'Uit voorraad') || !str_contains($stockText, 'P
 }
 // Pick aangemaakt zonder ontvangst op de regel: niet "Reeds ontvangen".
 $pick = planningLine(['material_status' => 'M', 'remaining_qty' => 0, 'qty_received' => 0, 'purchase_order_no' => '', 'qty_ordered' => 0, 'qty_open' => 0]);
-if (elpis_line_expected_receipt_display($pick) !== 'In magazijn, pick aangemaakt') {
+if (elpis_line_expected_receipt_display($pick) !== 'Status M, geen ontvangst of reservering gevonden') {
     fail('pick aangemaakt: ' . elpis_line_expected_receipt_display($pick));
 }
 $fetched = [];
@@ -1764,4 +1764,32 @@ if (($fetched[0][0] ?? '') !== ELPI_ITEM_LEDGER_ENTITY || ($fetched[0][1]['$filt
     fail('voorraadpost op Entry_No ophalen: ' . json_encode([$fetched, $ledgerMap]));
 }
 unset($GLOBALS['ELPIS_FETCH_OBSERVER'], $GLOBALS['ELPIS_TODAY']);
+
+// Te bestellen = Aantal min gereserveerd (voorraad + inkoop).
+$GLOBALS['ELPIS_TODAY'] = '2026-10-28';
+$sevLine = array_merge($resLine, ['item_no' => 'PK-SEV152D', 'quantity' => 16, 'qty_to_order' => 16, 'material_status' => 'V']);
+$sev = elpis_apply_receipt_expectations(['PRJ2608099' => [$sevLine]], [
+    $resRow(7, false, 1003, 'PRJ2608099', 96419, 10, 'PK-SEV152D'), $resRow(7, true, 32, '', 777, 10, 'PK-SEV152D'),
+], [], [])['PRJ2608099'][0];
+if (abs($sev['qty_to_order'] - 6) > 0.001) {
+    fail('deels uit voorraad: rest te bestellen: ' . json_encode($sev));
+}
+$full = elpis_apply_receipt_expectations(['PRJ2608099' => [array_merge($sevLine, ['quantity' => 2, 'qty_to_order' => 2])]], [
+    $resRow(8, false, 1003, 'PRJ2608099', 96419, 1, 'PK-SEV152D'), $resRow(8, true, 32, '', 778, 1, 'PK-SEV152D'),
+    $resRow(9, false, 1003, 'PRJ2608099', 96419, 1, 'PK-SEV152D'), $resRow(9, true, 32, '', 779, 1, 'PK-SEV152D'),
+], [], [])['PRJ2608099'][0];
+if (abs($full['qty_to_order']) > 0.001) {
+    fail('volledig uit voorraad: 0 te bestellen: ' . json_encode($full));
+}
+$none = elpis_apply_receipt_expectations(['PRJ2608099' => [array_merge($sevLine, ['quantity' => 1, 'qty_to_order' => 1, 'job_contract_entry_no' => 109650])]], [
+    $resRow(8, false, 1003, 'PRJ2608099', 96419, 1, 'PK-SEV152D'), $resRow(8, true, 32, '', 778, 1, 'PK-SEV152D'),
+], [], [])['PRJ2608099'][0];
+if (abs($none['qty_to_order'] - 1) > 0.001) {
+    fail('zonder reservering blijft Aantal: ' . json_encode($none));
+}
+$pickRes = planningLine(['material_status' => 'M', 'remaining_qty' => 0, 'qty_received' => 0, 'purchase_order_no' => '', 'reserved_from_stock' => true]);
+if (elpis_line_expected_receipt_display($pickRes) === 'Status M, geen ontvangst of reservering gevonden') {
+    fail('M met reservering is niet onbewezen');
+}
+unset($GLOBALS['ELPIS_TODAY']);
 echo "OK\n";
