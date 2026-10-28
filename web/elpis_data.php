@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 10;
+const ELPI_PROJECT_CACHE_VERSION = 11;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -316,6 +316,34 @@ function elpis_fetch_rows_direct(string $company, string $entitySet, array $quer
     return odata_get_all($url, $auth, $ttl);
 }
 
+/**
+ * Bronnen van de ontvangst-/inkoopstatus. Een mislukte query hierop (bv. Mímir-timeout)
+ * geeft een onvolledige uitkomst ("geen inkoop"); die mag niet in de projectcache.
+ */
+function elpis_entity_is_receipt_source(string $entitySet): bool
+{
+    return in_array($entitySet, [
+        ELPI_PLANNING_LINE_ENTITY,
+        ELPI_INKOOP_PLANNING_ENTITY,
+        ELPI_RESERVATION_ENTRY_ENTITY,
+        ELPI_PURCHASE_ORDER_LINE_ENTITY,
+        ELPI_ITEM_LEDGER_ENTITY,
+    ], true);
+}
+
+function elpis_note_receipt_fetch_failure(string $company, string $entitySet, string $message): void
+{
+    if (!isset($GLOBALS['ELPIS_RECEIPT_FETCH_FAILURES']) || !is_array($GLOBALS['ELPIS_RECEIPT_FETCH_FAILURES'])) {
+        $GLOBALS['ELPIS_RECEIPT_FETCH_FAILURES'] = [];
+    }
+    $GLOBALS['ELPIS_RECEIPT_FETCH_FAILURES'][] = ['company' => $company, 'entity' => $entitySet, 'message' => substr($message, 0, 300)];
+}
+
+function elpis_receipt_fetch_failure_count(): int
+{
+    return count((array) ($GLOBALS['ELPIS_RECEIPT_FETCH_FAILURES'] ?? []));
+}
+
 function elpis_try_fetch_rows(string $company, string $entitySet, array $query, int $ttl = ELPI_CACHE_TTL): array
 {
     // Een BC-fout, zoals een ongeldige enum, wordt een lege set. De pagina laadt dan
@@ -342,6 +370,9 @@ function elpis_try_fetch_rows(string $company, string $entitySet, array $query, 
         }
         if ($entitySet === ELPI_PURCHASE_ORDER_LINE_ENTITY) {
             elpis_log_purchase_lines_failure($company, $query, $message);
+        }
+        if (elpis_entity_is_receipt_source($entitySet)) {
+            elpis_note_receipt_fetch_failure($company, $entitySet, $message);
         }
         elpis_trace('odata', [
             'entity' => $entitySet,
@@ -3383,6 +3414,7 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
         $summary['managers'] += count($managers);
 
         $errorsBefore = count((array) ($GLOBALS['ELPIS_FETCH_ERRORS'] ?? []));
+        $receiptFailuresBefore = elpis_receipt_fetch_failure_count();
         $projectRows = elpis_fetch_project_rows_for_company($company, $ttl);
         $projects = elpis_collect_projects_from_rows($projectRows);
         $summary['projects'] += count($projects);
@@ -3411,6 +3443,13 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
             . ' line_projects=' . $stats['line_projects']
             . ' lines=' . $stats['lines']
             . ' fetch_errors=' . $stats['fetch_errors']);
+        $receiptFailures = elpis_receipt_fetch_failure_count() - $receiptFailuresBefore;
+        $summary['per_company'][$company]['receipt_fetch_errors'] = $receiptFailures;
+        if ($receiptFailures > 0) {
+            // Onvolledige ontvangstdata: niet cachen. De modal haalt dan live op.
+            error_log('elpis.nightly skip_cache company="' . $company . '" receipt_fetch_errors=' . $receiptFailures);
+            continue;
+        }
         foreach ($linesByProject as $projectNo => $lines) {
             elpis_write_project_cache($company, (string) $projectNo, is_array($lines) ? $lines : []);
         }
@@ -3572,7 +3611,12 @@ function elpis_load_project_modal_lines(string $company, string $projectNo, bool
     }
 
     $load = static function () use ($company, $projectNo): array {
+        $failuresBefore = elpis_receipt_fetch_failure_count();
         $byProject = elpis_load_shown_lines($company, [$projectNo], ELPI_CACHE_TTL);
+        if (elpis_receipt_fetch_failure_count() > $failuresBefore) {
+            // Liever een foutmelding dan stil "geen inkoop"; niets wegschrijven in de cache.
+            throw new RuntimeException('Ontvangstgegevens voor ' . $projectNo . ' konden niet volledig worden opgehaald.');
+        }
 
         return $byProject[$projectNo] ?? [];
     };
