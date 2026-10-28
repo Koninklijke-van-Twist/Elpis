@@ -1410,7 +1410,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
         var tokens = query === '' ? [] : query.split(/\s+/).filter(Boolean);
         var status = statusFilter ? statusFilter.value : '';
         var haystack = String(line.search || '').toLowerCase();
-        var statusOk = status === '' || line.filter_status === status || (status !== 'LATE' && line.material_status === status);
+        var statusOk = status === '' || line.filter_status === status || (status !== 'LATE' && (line.material_status_filter || line.material_status) === status);
         return matchesTokens(haystack, tokens) && statusOk;
     }
 

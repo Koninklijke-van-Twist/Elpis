@@ -36,15 +36,16 @@ try {
     $lines = elpis_load_project_modal_lines($company, $projectNo, $refresh);
     $cached = elpis_read_project_cache($company, $projectNo);
     $payloadLines = [];
-    $statuses = [ELPI_STATUS_LATE => true];
+    $statuses = [];
     foreach ($lines as $line) {
         if (!is_array($line)) {
             continue;
         }
-        $payloadLines[] = elpis_line_public_payload($line, $projectNo);
-        $material = strtoupper(trim((string) ($line['material_status'] ?? '')));
-        if ($material !== '') {
-            $statuses[$material] = true;
+        $payload = elpis_line_public_payload($line, $projectNo);
+        $payloadLines[] = $payload;
+        $material = (string) ($payload['material_status_filter'] ?? '');
+        if ($material !== '' && $material !== ELPI_STATUS_LATE) {
+            $statuses[$material] = (string) ($payload['material_status_filter_label'] ?? $material);
         }
     }
 
@@ -54,18 +55,12 @@ try {
         'label' => LOC('elpis.receipt.late'),
         'tone' => elpis_status_tone(ELPI_STATUS_LATE),
     ];
-    $materialCodes = array_keys($statuses);
-    $materialCodes = array_values(array_filter($materialCodes, static function (string $code): bool {
-        return $code !== ELPI_STATUS_LATE;
-    }));
-    usort($materialCodes, static function (string $left, string $right): int {
-        return strcasecmp(elpis_material_status_label($left), elpis_material_status_label($right));
-    });
-    foreach ($materialCodes as $code) {
+    asort($statuses, SORT_NATURAL | SORT_FLAG_CASE);
+    foreach ($statuses as $code => $statusLabel) {
         $statusList[] = [
-            'code' => $code,
-            'label' => elpis_material_status_label($code),
-            'tone' => elpis_status_tone($code),
+            'code' => (string) $code,
+            'label' => $statusLabel,
+            'tone' => elpis_status_tone(substr((string) $code, 0, 1)),
         ];
     }
 

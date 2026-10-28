@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 14;
+const ELPI_PROJECT_CACHE_VERSION = 15;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -881,6 +881,50 @@ function elpis_line_still_expecting_receipt(array $line): bool
  */
 function elpis_line_material_status_label(array $line): string
 {
+    return elpis_line_material_status_group($line)['label'];
+}
+
+/**
+ * Filtersleutel + tekst voor de kolom Materiaalstatus. M zonder pick:
+ * de neutrale M-tekst alleen zonder reservering, PO-koppeling of ontvangst;
+ * anders de ontvangsttekst (Reeds ontvangen / Te laat – PO… / PO-datum).
+ *
+ * @return array{key: string, label: string, filter_label: string}
+ */
+function elpis_line_material_status_group(array $line): array
+{
+    $code = strtoupper(trim((string) ($line['material_status'] ?? '')));
+    $label = elpis_line_material_status_pick_label($line);
+    if ($code !== 'M' || $label !== '') {
+        $key = $code === 'M' && !empty($line['completely_picked']) ? 'G'
+            : ($code === 'M' && (float) ($line['kvt_qty_picked'] ?? 0) > 0.00001 ? 'M_PARTIAL' : $code);
+
+        return ['key' => $key, 'label' => $label, 'filter_label' => $label];
+    }
+    if (elpis_line_is_pick_without_receipt($line)) {
+        $label = LOC('elpis.receipt.status_m_unproven');
+
+        return ['key' => 'M_UNPROVEN', 'label' => $label, 'filter_label' => $label];
+    }
+    $line = elpis_refresh_receipt_state($line);
+    $state = (string) ($line['receipt_state'] ?? '');
+    $display = elpis_line_expected_receipt_display($line);
+    if ($state === 'received') {
+        return ['key' => 'M_RECEIVED', 'label' => $display, 'filter_label' => LOC('elpis.receipt.already_nodate')];
+    }
+    if ($state === 'late') {
+        return ['key' => ELPI_STATUS_LATE, 'label' => $display, 'filter_label' => LOC('elpis.receipt.late')];
+    }
+    if ($state === 'stock') {
+        return ['key' => 'V', 'label' => $display, 'filter_label' => elpis_material_status_label('V')];
+    }
+
+    return ['key' => 'I', 'label' => $display !== '' ? $display : elpis_material_status_label('I'), 'filter_label' => elpis_material_status_label('I')];
+}
+
+/** Tekst op basis van code en pickvelden; '' bij M zonder pick. */
+function elpis_line_material_status_pick_label(array $line): string
+{
     $code = strtoupper(trim((string) ($line['material_status'] ?? '')));
     if ($code === '' || !function_exists('elpis_material_status_label')) {
         return '';
@@ -898,7 +942,7 @@ function elpis_line_material_status_label(array $line): string
         return elpis_material_status_label('M');
     }
 
-    return LOC('elpis.receipt.status_m_unproven');
+    return '';
 }
 
 function elpis_line_is_pick_without_receipt(array $line): bool
@@ -909,7 +953,8 @@ function elpis_line_is_pick_without_receipt(array $line): bool
     if (!empty($line['completely_received']) || !empty($line['completely_picked'])
         || !empty($line['reserved_from_stock']) || !empty($line['reserved_on_purchase'])
         || (float) ($line['kvt_qty_picked'] ?? 0) > 0.00001
-        || (float) ($line['kvt_qty_in_whse_pick'] ?? 0) > 0.00001) {
+        || (float) ($line['kvt_qty_in_whse_pick'] ?? 0) > 0.00001
+        || trim((string) ($line['purchase_order_no'] ?? '')) !== '') {
         return false;
     }
 
@@ -1844,7 +1889,7 @@ function elpis_purchase_line_select_fields(): string
 {
     // LVS_Completely_Received bestaat niet op PurchaseLines en laat de query
     // met HTTP 400 vallen. Ontvangen is Quantity min Outstanding_Quantity.
-    return 'Document_Type,Document_No,Line_No,Type,No,Job_No,Job_Task_No,Job_Line_Type,Quantity,Outstanding_Quantity,Expected_Receipt_Date';
+    return 'Document_Type,Document_No,Line_No,Type,No,Job_No,Job_Task_No,Job_Line_Type,Quantity,Outstanding_Quantity,Expected_Receipt_Date,Unit_of_Measure_Code';
 }
 
 function elpis_log_purchase_lines_failure(string $company, array $query, string $message): void
@@ -2018,7 +2063,51 @@ function elpis_normalize_purchase_order_line(array $row): array
         'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['Expected_Receipt_Date'] ?? $row['expected_receipt_date'] ?? '')),
         'quantity' => array_key_exists('Quantity', $row) ? (float) $row['Quantity'] : (array_key_exists('quantity', $row) ? (float) $row['quantity'] : null),
         'outstanding_qty' => array_key_exists('Outstanding_Quantity', $row) ? (float) $row['Outstanding_Quantity'] : (array_key_exists('outstanding_qty', $row) ? (float) $row['outstanding_qty'] : null),
+        'uom_code' => trim((string) ($row['Unit_of_Measure_Code'] ?? $row['uom_code'] ?? '')),
+        'uom_factor' => isset($row['uom_factor']) ? (float) $row['uom_factor'] : null,
     ];
+}
+
+/**
+ * PurchaseLines.Quantity/Outstanding_Quantity staan in de inkoopeenheid; reken
+ * om naar de basiseenheid met AppItemUnitOfMeasure.Qty_per_Unit_of_Measure
+ * (Item_No = No, Code = Unit_of_Measure_Code). Lege code of geen factor: 1.
+ */
+function elpis_apply_purchase_uom(string $company, array $lines, int $ttl = ELPI_CACHE_TTL): array
+{
+    $itemNos = [];
+    foreach ($lines as $line) {
+        if (($line['uom_factor'] ?? null) === null && ($line['uom_code'] ?? '') !== '' && ($line['item_no'] ?? '') !== '') {
+            $itemNos[$line['item_no']] = true;
+        }
+    }
+    $factors = [];
+    foreach (array_chunk(elpis_sort_odata_values(array_keys($itemNos)), ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
+        foreach (elpis_try_fetch_rows($company, 'AppItemUnitOfMeasure', [
+            '$select' => 'Item_No,Code,Qty_per_Unit_of_Measure',
+            '$filter' => elpis_odata_eq_list('Item_No', $chunk),
+        ], $ttl) as $row) {
+            $factor = (float) ($row['Qty_per_Unit_of_Measure'] ?? 0);
+            if (is_array($row) && $factor > 0.00001) {
+                $factors[strtoupper(trim((string) ($row['Item_No'] ?? ''))) . '|' . strtoupper(trim((string) ($row['Code'] ?? '')))] = $factor;
+            }
+        }
+    }
+    foreach ($lines as $i => $line) {
+        if (($line['uom_factor'] ?? null) !== null) {
+            continue;
+        }
+        $factor = $factors[strtoupper((string) ($line['item_no'] ?? '')) . '|' . strtoupper((string) ($line['uom_code'] ?? ''))] ?? 1.0;
+        foreach (['quantity', 'outstanding_qty'] as $field) {
+            if (isset($line[$field])) {
+                $line[$field] = (float) $line[$field] * $factor;
+            }
+        }
+        $line['uom_factor'] = $factor;
+        $lines[$i] = $line;
+    }
+
+    return $lines;
 }
 
 function elpis_purchase_line_best_date(array $line): string
@@ -2258,7 +2347,7 @@ function elpis_fetch_open_purchase_order_lines_for_documents(string $company, ar
         ], $ttl));
     }
 
-    return $lines;
+    return elpis_apply_purchase_uom($company, $lines, $ttl);
 }
 
 function elpis_fetch_open_purchase_order_lines_for_jobs(string $company, array $jobNos, int $ttl = ELPI_CACHE_TTL): array
@@ -2279,7 +2368,7 @@ function elpis_fetch_open_purchase_order_lines_for_jobs(string $company, array $
         ], $ttl));
     }
 
-    return $lines;
+    return elpis_apply_purchase_uom($company, $lines, $ttl);
 }
 
 function elpis_merge_purchase_order_lines(array ...$sets): array
@@ -3303,7 +3392,11 @@ function elpis_apply_ledger_receipt_quantities(string $projectNo, array $lines, 
                 $lines[$index]['qty_ordered'] = $quantity;
                 $ordered = $quantity;
             }
-            $lines[$index]['qty_open'] = max(0.0, $ordered - $quantity);
+            // Bekende PO-openstand (basiseenheid) gaat voor: een PO van 100 voor 60 nodig is niet 40 open.
+            $outstanding = $lines[$index]['purchase_outstanding_qty'] ?? null;
+            $lines[$index]['qty_open'] = $outstanding !== null && $outstanding !== ''
+                ? max(0.0, (float) $outstanding)
+                : max(0.0, $ordered - $quantity);
             $lines[$index]['qty_to_order'] = 0.0;
             $lines[$index] = elpis_refresh_receipt_state($lines[$index]);
             if (elpis_trace_wants_item((string) ($lines[$index]['item_no'] ?? ''))) {
@@ -3964,7 +4057,8 @@ function elpis_line_public_payload(array $line, string $projectNo): array
 {
     $line = elpis_refresh_receipt_state($line);
     $materialStatus = (string) ($line['material_status'] ?? '');
-    $materialLabel = elpis_line_material_status_label($line);
+    $materialGroup = elpis_line_material_status_group($line);
+    $materialLabel = $materialGroup['label'];
     if ($materialLabel === '') {
         $materialLabel = (string) ($line['material_status_label'] ?? '');
     }
@@ -3982,6 +4076,8 @@ function elpis_line_public_payload(array $line, string $projectNo): array
         'planning_date_sort' => elpis_normalize_bc_date((string) ($line['planning_date'] ?? '')),
         'material_status' => $materialStatus,
         'material_status_label' => $materialLabel,
+        'material_status_filter' => $materialGroup['key'],
+        'material_status_filter_label' => $materialGroup['filter_label'],
         'qty_to_order' => (float) ($line['qty_to_order'] ?? 0),
         'qty_ordered' => $orderedQty,
         'qty_open' => (float) ($line['qty_open'] ?? 0),
