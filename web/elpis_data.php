@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 12;
+const ELPI_PROJECT_CACHE_VERSION = 13;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -871,15 +871,17 @@ function elpis_line_still_expecting_receipt(array $line): bool
 }
 
 /**
- * Materiaalstatus 'Pick aangemaakt' (M) met Remaining_Qty 0: het materiaal ligt in het magazijn
- * en staat in een pick, maar er is geen ontvangst aan deze regel gekoppeld.
+ * Materiaalstatus M zonder ontvangst en zonder reservering: Elpis kan geen pick of ontvangst
+ * aantonen (Ariadne: PK-422/8 regels 1640000/1650000), dus geen "Reeds ontvangen" en geen "pick".
  */
 function elpis_line_is_pick_without_receipt(array $line): bool
 {
     if (strtoupper(trim((string) ($line['material_status'] ?? ''))) !== 'M') {
         return false;
     }
-    if (!empty($line['completely_received']) || !empty($line['completely_picked'])) {
+    if (!empty($line['completely_received']) || !empty($line['completely_picked'])
+        || !empty($line['reserved_from_stock']) || !empty($line['reserved_on_purchase'])
+        || (float) ($line['kvt_qty_picked'] ?? 0) > 0.00001) {
         return false;
     }
 
@@ -922,7 +924,7 @@ function elpis_line_expected_receipt_display(array $line): string
     $line = elpis_refresh_receipt_state($line);
     $state = (string) ($line['receipt_state'] ?? '');
     if ($state === 'received' && elpis_line_is_pick_without_receipt($line)) {
-        return LOC('elpis.receipt.pick_created');
+        return LOC('elpis.receipt.status_m_unproven');
     }
     if ($state === 'received' || ($state === '' && elpis_line_is_received($line))) {
         $date = elpis_format_display_date((string) ($line['received_date'] ?? ''));
@@ -2890,6 +2892,7 @@ function elpis_apply_line_reservations(
     $demands = $demandByJobContract[strtoupper(trim($projectKey)) . '|' . $contractEntryNo] ?? [];
     $purchaseDates = [];
     $reservedPurchaseQty = 0.0;
+    $reservedTotalQty = 0.0;
     $seenEntries = [];
     foreach ($demands as $demand) {
         $entryNo = (int) ($demand['entry_no'] ?? 0);
@@ -2903,6 +2906,7 @@ function elpis_apply_line_reservations(
             }
             if (elpis_reservation_is_stock_supply($supply)) {
                 $line['reserved_from_stock'] = true;
+                $reservedTotalQty += elpis_reservation_qty($supply);
                 $receiptNo = trim((string) ($supply['receipt_document_no'] ?? ''));
                 if ($receiptNo !== '') {
                     $line['stock_receipts'][$receiptNo] = (string) ($supply['receipt_posting_date'] ?? '');
@@ -2915,6 +2919,7 @@ function elpis_apply_line_reservations(
             $line['reserved_on_purchase'] = true;
             // Gereserveerde hoeveelheid, niet de hele PO-regel (die kan voor meer projecten zijn).
             $reservedPurchaseQty += elpis_reservation_qty($supply);
+            $reservedTotalQty += elpis_reservation_qty($supply);
             $date = elpis_date_for_reserved_purchase_line($supply, $byDocLine, $byDocItem);
             if ($date !== '') {
                 $purchaseDates[] = $date;
@@ -2938,7 +2943,16 @@ function elpis_apply_line_reservations(
         && (float) ($line['qty_ordered'] ?? 0) <= 0.00001) {
         $line['qty_ordered'] = $reservedPurchaseQty;
         $line['qty_open'] = max(0.0, $reservedPurchaseQty - (float) ($line['qty_received'] ?? 0));
-        $line['qty_to_order'] = max(0.0, (float) ($line['qty_to_order'] ?? 0) - $reservedPurchaseQty);
+    }
+
+    // Te bestellen = Aantal min gereserveerd (voorraad 32 + inkoop 39, alleen Reservation_Status
+    // 'Reservation'; tracking telt niet). Nooit hoger dan wat er al stond (directe PO: 0).
+    if ($reservedTotalQty > 0.00001) {
+        $line['reserved_qty'] = $reservedTotalQty;
+        $line['qty_to_order'] = max(0.0, min(
+            (float) ($line['qty_to_order'] ?? 0),
+            (float) ($line['quantity'] ?? 0) - $reservedTotalQty
+        ));
     }
 
     // Meerdere reserveringen/PO's: altijd de LAATSTE datum (worst case), ook als
