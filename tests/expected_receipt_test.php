@@ -121,7 +121,7 @@ if (!str_contains(elpis_item_ledger_select_fields(), 'Quantity')) {
     fail('ontvangstposten moeten Quantity ophalen');
 }
 $purchaseSelect = array_values(array_filter(array_map('trim', explode(',', elpis_purchase_line_select_fields()))));
-$purchaseSelectAllowed = ['Document_Type', 'Document_No', 'Line_No', 'Buy_from_Vendor_No', 'Type', 'No', 'Description', 'Location_Code', 'Quantity', 'Job_No', 'Job_Task_No', 'Job_Line_Type', 'Expected_Receipt_Date', 'LVS_Ex_Factory_Date', 'LVS_Date_on_Board', 'Outstanding_Quantity', 'Order_No'];
+$purchaseSelectAllowed = ['Document_Type', 'Document_No', 'Line_No', 'Buy_from_Vendor_No', 'Type', 'No', 'Description', 'Location_Code', 'Quantity', 'Job_No', 'Job_Task_No', 'Job_Line_Type', 'Expected_Receipt_Date', 'LVS_Ex_Factory_Date', 'LVS_Date_on_Board', 'Outstanding_Quantity', 'Order_No', 'Unit_of_Measure_Code'];
 foreach ($purchaseSelect as $purchaseField) {
     if (!in_array($purchaseField, $purchaseSelectAllowed, true)) {
         fail('PurchaseLines-select bevat een niet bewezen veld: ' . $purchaseField);
@@ -1294,7 +1294,7 @@ file_put_contents($stalePath, json_encode([
 if (elpis_read_project_cache('Koninklijke van Twist', 'PRJ-OUD') !== null) {
     fail('projectcache zonder versie wordt genegeerd');
 }
-if (ELPI_PROJECT_CACHE_VERSION < 14) {
+if (ELPI_PROJECT_CACHE_VERSION < 15) {
     fail('projectcacheversie moet minstens 11 zijn (oude caches met gepickte regels of stille lege inkoop na Mímir-timeout verversen)');
 }
 $previousVersionPath = elpis_project_cache_path('Koninklijke van Twist', '153390');
@@ -1806,4 +1806,18 @@ if (elpis_line_material_status_label(['material_status'=>'M','completely_picked'
 $p = ['quantity'=>16,'reserved_qty'=>1,'reserved_purchase_qty'=>0,'reserved_from_stock'=>true,'stock_receipts'=>['PWR2635059'=>'2026-01-01']];
 if (elpis_line_partial_stock_text($p) !== 'Uit voorraad 1 (PWR2635059) · 15 nog te bestellen') { echo "FAIL partial: ".elpis_line_partial_stock_text($p)."\n"; exit(1); }
 if (elpis_line_partial_stock_text(['quantity'=>1]+$p) !== '') { echo "FAIL full cover\n"; exit(1); }
+
+// PR34: M met ontvangst/PO is niet de neutrale tekst
+$g = elpis_line_material_status_group(['material_status'=>'M','quantity'=>4,'qty_received'=>4,'received_date'=>'2026-07-21','completely_received'=>true]);
+if ($g['key'] !== 'M_RECEIVED' || $g['label'] !== 'Reeds ontvangen (21-07-2026)') { echo "FAIL M received: ".json_encode($g)."\n"; exit(1); }
+$g = elpis_line_material_status_group(['material_status'=>'M','quantity'=>2]);
+if ($g['key'] !== 'M_UNPROVEN') { echo "FAIL M unproven\n"; exit(1); }
+if (elpis_line_is_pick_without_receipt(['material_status'=>'M','purchase_order_no'=>'PO1'])) { echo "FAIL M with PO\n"; exit(1); }
+
+// PR34: inkoopeenheid -> basiseenheid
+$uomLines = elpis_apply_purchase_uom('X', [
+    ['item_no'=>'I1','uom_code'=>'','quantity'=>3.0,'outstanding_qty'=>1.0,'uom_factor'=>1.0],
+    elpis_normalize_purchase_order_line(['Document_No'=>'P','Line_No'=>1,'No'=>'I2','Quantity'=>2,'Outstanding_Quantity'=>2,'Unit_of_Measure_Code'=>'']),
+]);
+if ($uomLines[0]['quantity'] !== 3.0 || $uomLines[1]['quantity'] !== 2.0 || $uomLines[1]['uom_factor'] !== 1.0) { echo "FAIL uom default 1\n"; exit(1); }
 echo "OK\n";
