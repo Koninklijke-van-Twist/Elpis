@@ -159,11 +159,10 @@ function elpis_mail_should_send_on(array $prefs, string $dateYmd): bool
     if ($prefs['frequency'] === ELPIS_MAIL_FREQ_NEVER) {
         return false;
     }
-    if ($prefs['frequency'] === ELPIS_MAIL_FREQ_DAILY) {
-        return true;
-    }
-
     $weekday = (int) (new DateTimeImmutable($dateYmd))->format('N');
+    if ($prefs['frequency'] === ELPIS_MAIL_FREQ_DAILY) {
+        return $weekday >= 1 && $weekday <= 5;
+    }
     if ($prefs['frequency'] === ELPIS_MAIL_FREQ_WEEKLY) {
         return $weekday === 1;
     }
