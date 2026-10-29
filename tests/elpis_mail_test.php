@@ -37,6 +37,13 @@ if (!elpis_mail_should_send_on(['frequency' => 'custom', 'weekdays' => [2], 'con
 if (elpis_mail_should_send_on(['frequency' => 'custom', 'weekdays' => [2], 'content' => 'both'], $monday)) {
     fail('aangepast stuurt niet op een uitgevinkte dag');
 }
+// Dagelijks = alleen werkdagen (ma t/m vr).
+$daily = ['frequency' => 'daily', 'weekdays' => [], 'content' => 'both'];
+foreach (['2026-10-26' => true, '2026-10-30' => true, '2026-10-31' => false, '2026-11-01' => false] as $d => $exp) {
+    if (elpis_mail_should_send_on($daily, $d) !== $exp) {
+        fail('dagelijks op ' . $d . ' moet ' . ($exp ? 'true' : 'false') . ' zijn');
+    }
+}
 if (elpis_mail_should_send_on(['frequency' => 'never', 'weekdays' => [1, 2, 3, 4, 5], 'content' => 'both'], $tuesday)) {
     fail('nooit stuurt geen mail');
 }
