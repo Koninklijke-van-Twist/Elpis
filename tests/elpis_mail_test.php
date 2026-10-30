@@ -312,6 +312,37 @@ if (($sent[0]['to'] ?? '') !== 'rdboer@kvt.nl' || str_contains($sent[0]['subject
     fail('uitgezette testmodus mailt de projectmanager: ' . json_encode($sent));
 }
 
+// Eén gecombineerde mail over bedrijven heen; @kvt.nl-adres wint, kop per bedrijf.
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity, array $query): array {
+    if ($entity === 'AppUserSetup') {
+        return [['User_ID' => 'KVT\\RDBOER', 'Email' => $company === 'KVT Germany' ? 'rdboer@kvt.nl' : 'rdboer@kvt.de']];
+    }
+
+    return [];
+};
+$woOnly = ['projects' => $bundle['Koninklijke van Twist']['projects'], 'lines' => ['PRJ2606522' => [['item_no' => 'WO'] + $late]]];
+$sent = [];
+elpis_reset_fetch_memo();
+elpis_dispatch_pm_digests(['KVT Gas' => $woOnly], $tuesday);
+if ($sent !== []) {
+    fail('alleen WO-regels geeft geen mail');
+}
+$multi = ['Koninklijke van Twist' => $bundle['Koninklijke van Twist'], 'KVT Gas' => $woOnly, 'KVT Germany' => $bundle['Koninklijke van Twist']];
+$sent = [];
+elpis_reset_fetch_memo();
+$combined = elpis_dispatch_pm_digests($multi, $tuesday);
+if (count($sent) !== 1 || ($combined['sent'] ?? 0) !== 1 || $sent[0]['to'] !== 'rdboer@kvt.nl') {
+    fail('één gecombineerde mail naar het @kvt.nl-adres: ' . json_encode($sent));
+}
+if (!str_contains($sent[0]['plain'], '== Koninklijke van Twist ==') || !str_contains($sent[0]['plain'], '== KVT Germany ==')
+    || !str_contains($sent[0]['html'], 'KVT Germany') || str_contains($sent[0]['plain'], 'KVT Gas')
+    || strpos($sent[0]['plain'], 'Koninklijke van Twist') > strpos($sent[0]['plain'], 'KVT Germany')) {
+    fail('kop per bedrijf in volgorde: ' . $sent[0]['plain']);
+}
+if (($combined['per_company']['KVT Germany']['sent'] ?? 0) !== 1) {
+    fail('per-bedrijf telling van gecombineerde mail');
+}
+
 elpis_nightly_write_state(['date' => '2026-10-20', 'status' => 'ok']);
 if (elpis_nightly_needs_run()) {
     fail('een geslaagde run van vandaag hoeft niet opnieuw');

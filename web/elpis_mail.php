@@ -678,9 +678,18 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
 
     $plainLines = [];
     $htmlRows = '';
+    $currentCompany = null;
     foreach ($lines as $line) {
         if (!is_array($line)) {
             continue;
+        }
+        // Gecombineerde mail: kop per bedrijf (regels zijn per bedrijf gegroepeerd).
+        $company = (string) ($line['company'] ?? '');
+        if ($company !== '' && $company !== $currentCompany) {
+            $currentCompany = $company;
+            $plainLines[] = ($plainLines === [] ? '' : "\n") . '== ' . $company . ' ==';
+            $htmlRows .= '<tr><td colspan="6" bgcolor="#eef6fc" style="' . $font . 'background-color:#eef6fc;color:#00529B;font-size:15px;font-weight:700;padding:12px 10px;border-bottom:1px solid ' . $lineColor . ';">'
+                . elpis_mail_h($company) . '</td></tr>';
         }
         $line = elpis_refresh_receipt_state($line);
         $projectNo = (string) ($line['project_no'] ?? '');
@@ -756,6 +765,34 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
     $skipped = 0;
     $details = [];
     $perCompany = [];
+    $pending = [];
+
+    // Eerst per bedrijf de managers en adressen; één adres per manager:
+    // het @kvt.nl-adres als dat er is, anders dat van het eerste bedrijf.
+    $managersByCompany = [];
+    $emailsByCompany = [];
+    $chosenEmail = [];
+    foreach ($byCompany as $company => $bundle) {
+        if (!is_array($bundle)) {
+            continue;
+        }
+        $managers = [];
+        foreach ((array) ($bundle['projects'] ?? []) as $project) {
+            $manager = is_array($project) ? elpis_normalize_bc_username((string) ($project['project_manager'] ?? '')) : '';
+            if ($manager !== '') {
+                $managers[$manager] = $manager;
+            }
+        }
+        $managersByCompany[$company] = $managers;
+        $emailsByCompany[$company] = elpis_fetch_user_emails((string) $company, array_values($managers), ELPI_NIGHTLY_MAX_AGE);
+        foreach ($managers as $manager) {
+            $email = (string) ($emailsByCompany[$company][$manager] ?? '');
+            $current = $chosenEmail[$manager] ?? '';
+            if ($email !== '' && ($current === '' || (!str_ends_with($current, '@kvt.nl') && str_ends_with($email, '@kvt.nl')))) {
+                $chosenEmail[$manager] = $email;
+            }
+        }
+    }
 
     foreach ($byCompany as $company => $bundle) {
         if (!is_array($bundle)) {
@@ -763,17 +800,8 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
         }
         $projects = is_array($bundle['projects'] ?? null) ? $bundle['projects'] : [];
         $linesByProject = is_array($bundle['lines'] ?? null) ? $bundle['lines'] : [];
-        $managers = [];
-        foreach ($projects as $project) {
-            if (!is_array($project)) {
-                continue;
-            }
-            $manager = elpis_normalize_bc_username((string) ($project['project_manager'] ?? ''));
-            if ($manager !== '') {
-                $managers[$manager] = $manager;
-            }
-        }
-        $emails = elpis_fetch_user_emails((string) $company, array_values($managers), ELPI_NIGHTLY_MAX_AGE);
+        $managers = $managersByCompany[$company];
+        $emails = $emailsByCompany[$company];
         $perCompany[(string) $company] = [
             'projects' => count($projects),
             'line_projects' => count($linesByProject),
@@ -792,7 +820,7 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
         $stats = &$perCompany[(string) $company];
 
         foreach ($managers as $manager) {
-            $intended = $emails[$manager] ?? '';
+            $intended = $chosenEmail[$manager] ?? '';
             $prefs = $intended !== '' ? elpis_mail_prefs_for_email($intended) : elpis_default_mail_prefs();
             if ($intended === '') {
                 $stats['no_email']++;
@@ -804,7 +832,8 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
                 continue;
             }
 
-            $excludedItemNos = (array) ($config['excluded_item_nos'] ?? []);
+            // 'WO' = placeholderregel in BC (kostprijs 0, WO-nr in Opslaglocatie): altijd uitsluiten.
+            $excludedItemNos = array_merge(['WO'], (array) ($config['excluded_item_nos'] ?? []));
             $allRows = elpis_digest_rows_for_manager($projects, $linesByProject, $manager);
             $kept = elpis_digest_rows_for_manager($projects, $linesByProject, $manager, $excludedItemNos);
             $stats['lines'] += count($allRows);
@@ -829,27 +858,35 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
                 $details[] = ['company' => (string) $company, 'manager' => $manager, 'status' => 'no-email'];
                 continue;
             }
-
-            $recipient = $testMode ? (string) $config['test_recipient'] : $intended;
-            [$subject, $plain, $html] = elpis_digest_message($manager, $intended, $matched, $testMode);
-            $ok = elpis_mail_send($recipient, $subject, $plain, $html);
-            if ($ok) {
-                $sent++;
-                $stats['sent']++;
-            } else {
-                $stats['failed']++;
+            foreach ($matched as $line) {
+                $pending[$manager][] = ['company' => (string) $company] + $line;
             }
-            $details[] = [
-                'company' => (string) $company,
-                'manager' => $manager,
-                'status' => $ok ? 'sent' : 'failed',
-                'to' => $recipient,
-                'intended' => $intended,
-                'lines' => count($matched),
-            ];
         }
         unset($stats);
-        $s = $perCompany[(string) $company];
+    }
+
+    // Pas na alle bedrijven versturen: één mail per manager.
+    foreach ($pending as $manager => $lines) {
+        $intended = $chosenEmail[$manager] ?? '';
+        $recipient = $testMode ? (string) $config['test_recipient'] : $intended;
+        [$subject, $plain, $html] = elpis_digest_message($manager, $intended, $lines, $testMode);
+        $ok = elpis_mail_send($recipient, $subject, $plain, $html);
+        $sent += $ok ? 1 : 0;
+        $companies = array_values(array_unique(array_column($lines, 'company')));
+        foreach ($companies as $company) {
+            $perCompany[$company][$ok ? 'sent' : 'failed']++;
+        }
+        $details[] = [
+            'company' => implode(', ', $companies),
+            'manager' => $manager,
+            'status' => $ok ? 'sent' : 'failed',
+            'to' => $recipient,
+            'intended' => $intended,
+            'lines' => count($lines),
+        ];
+    }
+
+    foreach ($perCompany as $company => $s) {
         $states = [];
         foreach ($s['receipt_states'] as $state => $count) {
             $states[] = $state . ':' . $count;
