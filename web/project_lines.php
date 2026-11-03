@@ -43,7 +43,7 @@ try {
         }
         $payload = elpis_line_public_payload($line, $projectNo);
         $payloadLines[] = $payload;
-        $statuses[(string) ($payload['material_status_filter'] ?? '')] = true;
+        $statuses[(string) ($payload['filter_status'] ?? '')] = true;
     }
 
     // Statusfilter in de volgorde van de centrale tabel ELPI_LINE_STATUSES (alleen statussen die voorkomen).

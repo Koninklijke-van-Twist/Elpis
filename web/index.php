@@ -141,7 +141,7 @@ function elpis_render_nightly_gate(): void
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= elpis_h(LOC('app.title')) ?></title>
-    <link rel="stylesheet" href="brand.css">
+    <link rel="stylesheet" href="brand.css?v=<?= (int) @filemtime(__DIR__ . '/brand.css') ?>">
     <link rel="manifest" href="site.webmanifest">
     <link rel="icon" href="box.svg" type="image/svg+xml">
     <style>
@@ -273,7 +273,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= elpis_h(LOC('app.title')) ?></title>
-    <link rel="stylesheet" href="brand.css">
+    <link rel="stylesheet" href="brand.css?v=<?= (int) @filemtime(__DIR__ . '/brand.css') ?>">
     <link rel="manifest" href="site.webmanifest">
     <link rel="icon" href="box.svg" type="image/svg+xml">
     <?php renderLanguageSwitcherStyles(); ?>
@@ -560,6 +560,12 @@ $projects = elpis_sort_projects_for_display($projects, []);
         .elpis-modal-toolbar { display: grid; }
         .elpis-modal-body { overflow: auto; padding: 0 12px 16px; }
         .elpis-modal-toolbar label { display: grid; gap: 6px; font-weight: 700; color: var(--kvt-perkins-blue); font-size: 0.9rem; }
+        .elpis-status-filter { position: relative; }
+        .elpis-status-popover { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; min-width: 260px; max-width: 90vw; background: #fff; border: 1px solid var(--kvt-line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 10px; display: grid; gap: 8px; }
+        .elpis-status-popover[hidden] { display: none; }
+        .elpis-status-options { display: grid; gap: 4px; }
+        .elpis-modal-toolbar label.elpis-status-option { display: flex; gap: 8px; align-items: center; font-weight: 600; color: #111827; padding: 4px 8px; border-radius: 8px; }
+        .elpis-status-popover-actions { display: flex; flex-wrap: wrap; gap: 6px; }
         .elpis-modal-toolbar input, .elpis-modal-toolbar select { font: inherit; border-radius: 10px; border: 1px solid var(--kvt-line); padding: 12px 14px; width: 100%; box-sizing: border-box; }
         .elpis-btn--compact { padding: 8px 12px; }
         .elpis-opt-alert { background: var(--kvt-row-alert); color: var(--kvt-danger); }
@@ -773,8 +779,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
                         $projectMatchesSearch = elpis_matches_search_tokens($searchBlob, $projectSearchTokens);
                         $executionSummary = $cachedLines !== [] ? elpis_project_execution_summary($cachedLines) : ['state' => 'none', 'date' => ''];
                         $executionValue = elpis_project_execution_value($executionSummary);
-                        // E: '' = nog niet gecachet (blijft zichtbaar), anders 1/0 volgens dezelfde probleemdefinitie.
-                        $hasProblem = $cachedLines === [] ? '' : (array_filter($cachedLines, static fn ($l) => is_array($l) && elpis_line_is_problem($l)) !== [] ? '1' : '0');
+                        // E: alleen '1' bij >= 1 probleemregel (centrale statustabel, actuele cacheversie); geen regels/geen cache = '0'.
+                        $hasProblem = array_filter($cachedLines, static fn ($l) => is_array($l) && elpis_line_is_problem($l)) !== [] ? '1' : '0';
                         $isFocused = $projectNo !== '' && $projectNo === $openProjectNo;
                         $shareUrl = elpis_url([
                             'company' => $company,
@@ -869,16 +875,18 @@ $projects = elpis_sort_projects_for_display($projects, []);
                 <?= elpis_h(LOC('elpis.label.line_search')) ?>
                 <input type="search" id="elpis-line-search" name="line_q" value="<?= elpis_h(trim((string) ($_GET['line_q'] ?? ''))) ?>" autocomplete="off" spellcheck="false" placeholder="<?= elpis_h(LOC('elpis.placeholder.line_search')) ?>">
             </label>
-            <label>
-                <?= elpis_h(LOC('elpis.label.material_status_filter')) ?>
-                <select id="elpis-material-status-filter"></select>
-            </label>
+            <div class="elpis-status-filter">
+                <button type="button" class="elpis-btn elpis-btn--compact" id="elpis-status-filter-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="elpis-status-popover"><?= elpis_h(LOC('elpis.label.material_status_filter')) ?> <span id="elpis-status-filter-count"></span></button>
+                <div class="elpis-status-popover" id="elpis-status-popover" role="dialog" aria-label="<?= elpis_h(LOC('elpis.label.material_status_filter')) ?>" hidden>
+                    <div id="elpis-status-options" class="elpis-status-options"></div>
+                    <div class="elpis-status-popover-actions">
+                        <button type="button" class="elpis-btn elpis-btn--compact" id="elpis-status-problems-only"><?= elpis_h(LOC('elpis.label.problems_only')) ?></button>
+                        <button type="button" class="elpis-btn elpis-btn--compact" id="elpis-status-popover-close"><?= elpis_h(LOC('elpis.btn.close')) ?></button>
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="elpis-modal-actions">
-            <label class="elpis-check">
-                <input type="checkbox" id="elpis-problems-only" checked>
-                <?= elpis_h(LOC('elpis.label.problems_only')) ?>
-            </label>
             <button type="button" class="elpis-btn elpis-btn--compact" data-elpis-export><?= elpis_h(LOC('elpis.btn.export_xlsx')) ?></button>
         </div>
         <div class="elpis-modal-body" id="elpis-modal-body"></div>
@@ -896,8 +904,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
     </div>
 </div>
 
-<script src="elpis_history.js"></script>
-<script src="elpis_xlsx.js"></script>
+<script src="elpis_history.js?v=<?= (int) @filemtime(__DIR__ . '/elpis_history.js') ?>"></script>
+<script src="elpis_xlsx.js?v=<?= (int) @filemtime(__DIR__ . '/elpis_xlsx.js') ?>"></script>
 <script>
 (function () {
     var DELAY_MS = 500;
@@ -1330,7 +1338,14 @@ $projects = elpis_sort_projects_for_display($projects, []);
     var modalTitle = document.getElementById('elpis-modal-title');
     var modalBody = document.getElementById('elpis-modal-body');
     var lineSearch = document.getElementById('elpis-line-search');
-    var statusFilter = document.getElementById('elpis-material-status-filter');
+    var statusFilterBtn = document.getElementById('elpis-status-filter-btn');
+    var statusPopover = document.getElementById('elpis-status-popover');
+    var statusOptions = document.getElementById('elpis-status-options');
+    var statusCount = document.getElementById('elpis-status-filter-count');
+    var statusProblemsBtn = document.getElementById('elpis-status-problems-only');
+    var statusPopoverClose = document.getElementById('elpis-status-popover-close');
+    var availableStatuses = [];
+    var desiredStatus = '';
     var refreshButton = document.querySelector('[data-elpis-refresh]');
     var loader = document.getElementById('elpis-loader');
     var currentProject = '';
@@ -1338,7 +1353,6 @@ $projects = elpis_sort_projects_for_display($projects, []);
     var loadGeneration = 0;
     var numericSortKeys = { to_order: true, ordered: true, open: true, received: true, stock: true };
         var toneClass = { alert: 'elpis-row--alert', orange: 'elpis-row--orange', warn: 'elpis-row--warn', ok: 'elpis-row--ok', muted: 'elpis-row--muted' };
-    var problemsOnly = document.getElementById('elpis-problems-only');
     var projectsProblemsOnly = document.getElementById('elpis-projects-problems-only');
     var exportButton = document.querySelector('[data-elpis-export]');
         var optClass = { alert: 'elpis-opt-alert', orange: 'elpis-opt-orange', warn: 'elpis-opt-warn', ok: 'elpis-opt-ok', muted: 'elpis-opt-muted' };
@@ -1387,8 +1401,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
             var projectNo = item.getAttribute('data-project-no') || '';
             var isPinned = pinnedProjectNo !== '' && projectNo === pinnedProjectNo;
             var projectVisible = matchesTokens(projectHaystack, tokens) || isPinned;
-            // E: alleen projecten met probleemregels; nog niet gecachete projecten (leeg) blijven zichtbaar.
-            item.classList.toggle('is-problem-hidden', !isPinned && !!(projectsProblemsOnly && projectsProblemsOnly.checked) && item.getAttribute('data-has-problem') === '0');
+            // E: alleen projecten met >= 1 probleemregel; zonder regels of zonder cache verbergen.
+            item.classList.toggle('is-problem-hidden', !isPinned && !!(projectsProblemsOnly && projectsProblemsOnly.checked) && item.getAttribute('data-has-problem') !== '1');
             item.classList.toggle('is-filtered-out', !projectVisible);
             item.classList.toggle('is-pinned', isPinned);
             item.classList.toggle('is-highlighted', isPinned);
@@ -1444,49 +1458,80 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
     }
 
-    function renderStatusOptions(statuses) {
-        if (!statusFilter) {
-            return;
+    // H: één checkbox per eigen status (centrale tabel); standaard alleen probleemstatussen aan.
+    // line_status in de URL = komma-lijst; leeg = standaard (probleemstatussen).
+    function defaultStatusCodes() {
+        return availableStatuses.filter(function (status) { return !!status.problem; }).map(function (status) { return status.code; });
+    }
+
+    function checkedStatusCodes() {
+        if (!statusOptions) {
+            return [];
         }
-        var current = statusFilter.value;
-        if (current === '') {
-            current = statusFilter.getAttribute('data-desired-status') || '';
-        }
-        statusFilter.innerHTML = '';
-        var all = document.createElement('option');
-        all.value = '';
-        all.textContent = modal ? (modal.getAttribute('data-status-all') || '') : '';
-        statusFilter.appendChild(all);
-        (statuses || []).forEach(function (status) {
-            var option = document.createElement('option');
-            option.value = status.code || '';
-            option.textContent = status.label || status.code || '';
-            option.className = optClass[status.tone] || '';
-            option.style.backgroundColor = optBg[status.tone] || '';
-            statusFilter.appendChild(option);
-        });
-        if (current !== '') {
-            statusFilter.value = current;
+        return Array.prototype.slice.call(statusOptions.querySelectorAll('input[type=checkbox]:checked')).map(function (input) { return input.value; });
+    }
+
+    function applyDesiredStatus() {
+        var wanted = desiredStatus === '' ? defaultStatusCodes() : desiredStatus.split(',');
+        if (statusOptions) {
+            statusOptions.querySelectorAll('input[type=checkbox]').forEach(function (input) {
+                input.checked = wanted.indexOf(input.value) !== -1;
+            });
         }
         paintStatusFilter();
     }
 
-    function paintStatusFilter() {
-        if (!statusFilter) {
+    function renderStatusOptions(statuses) {
+        availableStatuses = statuses || [];
+        if (!statusOptions) {
             return;
         }
-        var selected = statusFilter.options[statusFilter.selectedIndex];
-        statusFilter.style.backgroundColor = selected ? (selected.style.backgroundColor || '') : '';
+        statusOptions.innerHTML = '';
+        availableStatuses.forEach(function (status) {
+            var label = document.createElement('label');
+            label.className = 'elpis-check elpis-status-option ' + (optClass[status.tone] || '');
+            label.style.backgroundColor = optBg[status.tone] || '';
+            var input = document.createElement('input');
+            input.type = 'checkbox';
+            input.value = status.code || '';
+            input.addEventListener('change', onStatusChange);
+            label.appendChild(input);
+            label.appendChild(document.createTextNode(' ' + (status.label || status.code || '')));
+            statusOptions.appendChild(label);
+        });
+        applyDesiredStatus();
+    }
+
+    function paintStatusFilter() {
+        if (statusCount) {
+            statusCount.textContent = availableStatuses.length ? '(' + checkedStatusCodes().length + '/' + availableStatuses.length + ')' : '';
+        }
+    }
+
+    function onStatusChange() {
+        var codes = checkedStatusCodes();
+        var isDefault = codes.slice().sort().join(',') === defaultStatusCodes().slice().sort().join(',');
+        desiredStatus = isDefault ? '' : (codes.length ? codes.join(',') : '-');
+        paintStatusFilter();
+        renderLines();
+        projectHistory.setStatus(desiredStatus);
+    }
+
+    function setStatusPopover(open) {
+        if (!statusPopover || !statusFilterBtn) {
+            return;
+        }
+        statusPopover.hidden = !open;
+        statusFilterBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
 
     function lineVisible(line) {
         var query = normalizeSearchQuery(lineSearch ? lineSearch.value : '');
         var tokens = query === '' ? [] : query.split(/\s+/).filter(Boolean);
-        var status = statusFilter ? statusFilter.value : '';
+        var checked = checkedStatusCodes();
         var haystack = String(line.search || '').toLowerCase();
-        var statusOk = status === '' || line.filter_status === status || (status !== 'LATE' && (line.material_status_filter || line.material_status) === status);
-        var problemOk = !(problemsOnly && problemsOnly.checked) || !!line.is_problem;
-        return matchesTokens(haystack, tokens) && statusOk && problemOk;
+        var statusOk = availableStatuses.length === 0 || checked.indexOf(line.filter_status) !== -1;
+        return matchesTokens(haystack, tokens) && statusOk;
     }
 
     function renderLines() {
@@ -1623,10 +1668,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
         if (lineSearch) {
             lineSearch.value = lineQuery;
         }
-        if (statusFilter) {
-            statusFilter.setAttribute('data-desired-status', lineStatus);
-            statusFilter.value = lineStatus;
-        }
+        desiredStatus = lineStatus;
+        applyDesiredStatus();
     }
 
     function loadProject(projectNo, label, refresh) {
@@ -1687,15 +1730,26 @@ $projects = elpis_sort_projects_for_display($projects, []);
         },
         onLineFilter: function (view) {
             captureLineFilters(view);
-            if (statusFilter) {
-                paintStatusFilter();
-            }
             renderLines();
         }
     });
 
-    if (problemsOnly) {
-        problemsOnly.addEventListener('change', renderLines);
+    if (statusFilterBtn) {
+        statusFilterBtn.addEventListener('click', function () {
+            setStatusPopover(!!statusPopover && statusPopover.hidden);
+        });
+    }
+    if (statusPopoverClose) {
+        statusPopoverClose.addEventListener('click', function () {
+            setStatusPopover(false);
+        });
+    }
+    if (statusProblemsBtn) {
+        statusProblemsBtn.addEventListener('click', function () {
+            desiredStatus = '';
+            applyDesiredStatus();
+            onStatusChange();
+        });
     }
     if (projectsProblemsOnly) {
         projectsProblemsOnly.addEventListener('change', applyProjectFilters);
@@ -1745,14 +1799,6 @@ $projects = elpis_sort_projects_for_display($projects, []);
         lineSearch.addEventListener('input', function () {
             renderLines();
             projectHistory.setLineQuery(lineSearch.value);
-        });
-    }
-    if (statusFilter) {
-        statusFilter.addEventListener('change', function () {
-            statusFilter.setAttribute('data-desired-status', statusFilter.value);
-            paintStatusFilter();
-            renderLines();
-            projectHistory.setStatus(statusFilter.value);
         });
     }
     if (refreshButton) {

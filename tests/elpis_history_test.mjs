@@ -274,7 +274,7 @@ test('een gedeelde project-url opent bij laden het project zonder extra history-
 });
 
 test('index koppelt navigatie aan history-entries en niet aan replaceState van het project', () => {
-    assert.match(indexPhp, /src="elpis_history\.js"/);
+    assert.match(indexPhp, /src="elpis_history\.js(\?v=[^"]*)?"/);
     assert.match(indexPhp, /history:\s*'deferred'/);
     assert.match(indexPhp, /ElpisHistory\.navigationMode/);
     assert.match(indexPhp, /ElpisHistory\.stripTransientParams/);

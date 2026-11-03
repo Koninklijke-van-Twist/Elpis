@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 17;
+const ELPI_PROJECT_CACHE_VERSION = 18;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -84,6 +84,8 @@ const ELPI_LINE_STATUSES = [
     'ORDER_TOO_LATE' => ['label' => 'elpis.status.order_too_late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
     'NO_DATE' => ['label' => 'elpis.status.no_date', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'unconfirmed'],
     'TO_ORDER' => ['label' => 'elpis.status.to_order', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'unconfirmed'],
+    // R: al ontvangen, ligt nog in bin INBOUND (locatie KVT); magazijn moet het nog klaarleggen voor pick.
+    'INBOUND' => ['label' => 'elpis.status.inbound', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
     'PARTIAL_STOCK' => ['label' => 'elpis.status.partial_stock', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
     'PARTIAL_ORDERED' => ['label' => 'elpis.status.partial_ordered', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'date'],
     'ORDERED' => ['label' => 'elpis.status.ordered', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'date'],
@@ -413,6 +415,7 @@ function elpis_line_coverage(array $line): array
         'quantity' => $quantity,
         'picked' => $picked,
         'on_hand' => $onHand + $stockReserved + $freeStock,
+        'received_on_hand' => $onHand,
         'open_purchase' => $openPurchase,
         'rest' => $need,
     ];
@@ -457,6 +460,7 @@ function elpis_line_status(array $line, ?string $today = null): array
             : ($lead !== null && $need !== '' && date('Y-m-d', strtotime($today . ' +' . $lead . ' days')) > $need)),
         'NO_DATE' => $b > 0.00001 && $date === '',
         'TO_ORDER' => $rest > 0.00001,
+        'INBOUND' => $cov['received_on_hand'] > 0.00001 && (float) ($line['inbound_qty'] ?? 0) > 0.00001,
         'PARTIAL_STOCK' => $partial && $b <= 0.00001,
         'PARTIAL_ORDERED' => $partial,
         'ORDERED' => $b > 0.00001,
@@ -492,6 +496,9 @@ function elpis_line_status(array $line, ?string $today = null): array
             break;
         case 'ORDER_TOO_LATE':
             $parts[] = LOC('elpis.receipt.order_too_late', (string) $lead);
+            break;
+        case 'INBOUND':
+            $parts[] = LOC('elpis.receipt.inbound', elpis_format_qty((float) $line['inbound_qty']));
             break;
         case 'NO_DATE':
             $parts[] = LOC('elpis.receipt.missing');
@@ -4060,7 +4067,7 @@ function elpis_enrich_planning_lines_with_receipts(string $company, array $lines
         }
     }
 
-    return elpis_apply_receipt_expectations(
+    $linesByProject = elpis_apply_receipt_expectations(
         $linesByProject,
         $context['reservations'],
         $context['purchase_lines'],
@@ -4072,6 +4079,60 @@ function elpis_enrich_planning_lines_with_receipts(string $company, array $lines
             'free_stock_index' => $context['free_stock_index'] ?? [],
         ]
     );
+
+    return elpis_apply_inbound_bins($linesByProject, elpis_fetch_inbound_bins($company, $linesByProject, $ttl));
+}
+
+/** R: BinContent KVT/INBOUND per artikel (Quantity_Base), alleen projectartikelen, chunked + gecachet. */
+function elpis_fetch_inbound_bins(string $company, array $linesByProject, int $ttl = ELPI_CACHE_TTL): array
+{
+    $items = [];
+    foreach ($linesByProject as $lines) {
+        foreach ((array) $lines as $line) {
+            $item = is_array($line) ? trim((string) ($line['item_no'] ?? '')) : '';
+            if ($item !== '' && elpis_line_coverage($line)['received_on_hand'] > 0.00001) {
+                $items[$item] = true;
+            }
+        }
+    }
+    $bins = [];
+    foreach (array_chunk(elpis_sort_odata_values(array_keys($items)), ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
+        $rows = elpis_try_fetch_rows($company, 'BinContent', [
+            '$select' => 'Item_No,Location_Code,Bin_Code,Quantity_Base,Pick_Quantity_Base,Put_away_Quantity_Base',
+            '$filter' => "Location_Code eq 'KVT' and Bin_Code eq 'INBOUND' and (" . elpis_odata_eq_list('Item_No', $chunk) . ')',
+        ], $ttl);
+        foreach ($rows as $row) {
+            $item = is_array($row) ? strtoupper(trim((string) ($row['Item_No'] ?? ''))) : '';
+            if ($item !== '') {
+                $bins[$item] = ($bins[$item] ?? 0.0) + max(0.0, (float) ($row['Quantity_Base'] ?? 0));
+            }
+        }
+    }
+
+    return $bins;
+}
+
+/**
+ * INBOUND is per artikel, niet per project: verdeel over regels die al ontvangen-maar-niet-gepicked zijn
+ * (ontvangst via PO / ILE Inkoop met Job_No van dit project), per regel nooit meer dan dat tekort.
+ */
+function elpis_apply_inbound_bins(array $linesByProject, array $bins): array
+{
+    foreach ($linesByProject as $projectNo => $lines) {
+        foreach ((array) $lines as $i => $line) {
+            if (!is_array($line)) {
+                continue;
+            }
+            $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
+            $alloc = min((float) ($bins[$item] ?? 0), elpis_line_coverage($line)['received_on_hand']);
+            $linesByProject[$projectNo][$i]['inbound_qty'] = max(0.0, $alloc);
+            if ($alloc > 0) {
+                $bins[$item] -= $alloc;
+            }
+        }
+    }
+
+    return $linesByProject;
 }
 
 function elpis_load_shown_lines(string $company, array $projectNos, int $ttl = ELPI_CACHE_TTL, ?callable $onPhase = null): array
