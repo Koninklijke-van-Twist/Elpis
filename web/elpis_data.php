@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 18;
+const ELPI_PROJECT_CACHE_VERSION = 19;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -61,11 +61,11 @@ const ELPI_ITEM_LEDGER_ENTITY = 'ItemLedgerEntries';
 const ELPI_WORK_ORDER_ENTITY = 'AppWerkorders';
 const ELPI_USER_SETUP_ENTITY = 'AppUserSetup';
 const ELPI_USERS_ENTITY = 'Users';
-/** Eigen status in het regelfilter, naast KVT_Status_Material. */
+/** Eigen status 'te laat' in het regelfilter. */
 const ELPI_STATUS_LATE = 'LATE';
 
 /**
- * Eigen materiaalstatus (KVT_Status_Material uit BC wordt niet meer gebruikt).
+ * Eigen regelstatus (bepaald door Elpis zelf).
  * ÉÉN plek voor volgorde, labels, kleur en "probleemstatus": de volgorde van deze
  * array is de prioriteit (eerste regel die past wint) én de volgorde in het filter.
  * Kleuren (Tim, punt N): groen = alles OK, oranje = aandacht, rood = echt probleem,
@@ -86,9 +86,14 @@ const ELPI_LINE_STATUSES = [
     'TO_ORDER' => ['label' => 'elpis.status.to_order', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'unconfirmed'],
     // R: al ontvangen, ligt nog in bin INBOUND (locatie KVT); magazijn moet het nog klaarleggen voor pick.
     'INBOUND' => ['label' => 'elpis.status.inbound', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
+    // Deels gepicked, rest al ontvangen/gereserveerd voor dit project: nog picken.
+    'PARTIAL_RECEIVED' => ['label' => 'elpis.status.partial_received', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
     'PARTIAL_STOCK' => ['label' => 'elpis.status.partial_stock', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
     'PARTIAL_ORDERED' => ['label' => 'elpis.status.partial_ordered', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'date'],
     'ORDERED' => ['label' => 'elpis.status.ordered', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'date'],
+    // Gedekt door ontvangst/reservering/projectvoorraad voor dit project (niet vrije voorraad): nog picken.
+    'RECEIVED_TO_PICK' => ['label' => 'elpis.status.received_to_pick', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
+    // Alleen als (een deel van) de dekking uit vrije voorraad komt (kolom Voorraad > 0).
     'STOCK' => ['label' => 'elpis.status.stock', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
 ];
 
@@ -415,6 +420,9 @@ function elpis_line_coverage(array $line): array
         'quantity' => $quantity,
         'picked' => $picked,
         'on_hand' => $onHand + $stockReserved + $freeStock,
+        // Dekking voor DIT project (ontvangen/projectvoorraad + reservering) vs. vrije voorraad.
+        'project_on_hand' => $onHand + $stockReserved,
+        'free_on_hand' => $freeStock,
         'received_on_hand' => $onHand,
         'open_purchase' => $openPurchase,
         'rest' => $need,
@@ -445,6 +453,7 @@ function elpis_line_status(array $line, ?string $today = null): array
     $latestOrder = $latestOrder === '' ? '' : substr($latestOrder, 0, 10);
     $rest = $cov['rest'];
     $notOnHand = $b > 0.00001 || $rest > 0.00001;
+    $projectOnly = $cov['project_on_hand'] > 0.00001 && $cov['free_on_hand'] <= 0.00001;
     $checks = [
         'RETURN' => $n <= 0.00001,
         'CLOSED' => function_exists('elpis_line_work_order_closed') && elpis_line_work_order_closed($line),
@@ -461,9 +470,11 @@ function elpis_line_status(array $line, ?string $today = null): array
         'NO_DATE' => $b > 0.00001 && $date === '',
         'TO_ORDER' => $rest > 0.00001,
         'INBOUND' => $cov['received_on_hand'] > 0.00001 && (float) ($line['inbound_qty'] ?? 0) > 0.00001,
+        'PARTIAL_RECEIVED' => $partial && $b <= 0.00001 && $projectOnly,
         'PARTIAL_STOCK' => $partial && $b <= 0.00001,
         'PARTIAL_ORDERED' => $partial,
         'ORDERED' => $b > 0.00001,
+        'RECEIVED_TO_PICK' => $projectOnly,
         'STOCK' => true,
     ];
     $key = 'STOCK';
@@ -523,8 +534,53 @@ function elpis_line_status(array $line, ?string $today = null): array
     if ($cov['rest'] > 0.00001 && !in_array($key, ['RETURN', 'CLOSED', 'PICKED'], true)) {
         $parts[] = LOC('elpis.receipt.to_order_suffix', elpis_format_qty($cov['rest']));
     }
+    $q = 'elpis_format_qty';
+    $numbers = LOC('elpis.reason.numbers', $q($n), $q($p), $q($cov['project_on_hand']), $q($cov['free_on_hand']), $q($b), $q($rest));
+    $needDisplay = $need !== '' ? elpis_format_display_date($need) : '—';
+    switch ($key) {
+        case 'RETURN':
+            $why = LOC('elpis.reason.return', $q($n));
+            break;
+        case 'CLOSED':
+            $why = LOC('elpis.reason.closed');
+            break;
+        case 'LATE':
+            $why = LOC('elpis.reason.late', $needDisplay);
+            break;
+        case 'DELIVERY_LATE':
+            $why = LOC('elpis.reason.delivery_late', $display !== '' ? $display : '—', $needDisplay);
+            break;
+        case 'ORDER_TOO_LATE':
+            $why = $latestOrder !== ''
+                ? LOC('elpis.reason.order_too_late_date', elpis_format_display_date($latestOrder))
+                : LOC('elpis.reason.order_too_late', trim((string) ($line['critical_lead_time'] ?? '')) !== '' ? trim((string) $line['critical_lead_time']) : ($lead . 'D'), $needDisplay);
+            break;
+        case 'NO_DATE':
+            $why = LOC('elpis.reason.no_date');
+            break;
+        case 'TO_ORDER':
+            $why = LOC('elpis.reason.to_order', $q($rest));
+            break;
+        case 'INBOUND':
+            $why = LOC('elpis.reason.inbound', $q((float) ($line['inbound_qty'] ?? 0)));
+            break;
+        case 'PARTIAL_RECEIVED':
+        case 'RECEIVED_TO_PICK':
+            $why = LOC('elpis.reason.received_to_pick');
+            break;
+        case 'PARTIAL_ORDERED':
+        case 'ORDERED':
+            $why = LOC('elpis.reason.ordered', $display !== '' ? $display : '—');
+            break;
+        case 'PICKED':
+            $why = LOC('elpis.reason.picked');
+            break;
+        default:
+            $why = LOC('elpis.reason.stock');
+    }
+    $reason = $why . ' · ' . $numbers;
     $label = elpis_line_status_label($key);
-    if ($partial && !in_array($key, ['PARTIAL_STOCK', 'PARTIAL_ORDERED'], true) && $key !== 'PICKED') {
+    if ($partial && !in_array($key, ['PARTIAL_RECEIVED', 'PARTIAL_STOCK', 'PARTIAL_ORDERED'], true) && $key !== 'PICKED') {
         $label .= ' (' . LOC('elpis.status.partial_lc') . ')';
         $parts[] = LOC('elpis.status.partial_lc') . ' ' . elpis_format_qty($p) . '/' . elpis_format_qty($n);
     }
@@ -533,6 +589,8 @@ function elpis_line_status(array $line, ?string $today = null): array
         'key' => $key,
         'label' => $label,
         'receipt_text' => implode(' · ', $parts),
+        // Waarom deze status (dezelfde regel die won), met de getallen; tooltip in de tabel.
+        'reason' => $reason,
         'date' => $date,
         'date_missing' => $key === 'NO_DATE',
         'tone' => ELPI_LINE_STATUSES[$key]['tone'],
@@ -1379,7 +1437,7 @@ function elpis_refresh_receipt_state(array $line): array
 {
     $key = elpis_line_status($line)['key'];
     $state = ELPI_LINE_STATUSES[$key]['receipt_state'] ?? '';
-    if (in_array($key, ['STOCK', 'PARTIAL_STOCK'], true) && elpis_line_is_received($line)) {
+    if (in_array($key, ['STOCK', 'PARTIAL_STOCK', 'RECEIVED_TO_PICK', 'PARTIAL_RECEIVED'], true) && elpis_line_is_received($line)) {
         $state = 'received';
     }
     $line['receipt_state'] = $state;
@@ -1420,60 +1478,22 @@ function elpis_line_still_expecting_receipt(array $line): bool
     return $qtyOpen > 0 || $qtyToOrder > 0 || ($qtyOrdered > 0 && $qtyReceived < $qtyOrdered);
 }
 
-/**
- * Materiaalstatus M zonder ontvangst en zonder reservering: Elpis kan geen pick of ontvangst
- * aantonen (Ariadne: PK-422/8 regels 1640000/1650000), dus geen "Reeds ontvangen" en geen "pick".
- */
-/**
- * Materiaalstatus-tekst. Bij M alleen 'Pick aangemaakt' als
- * KVT_Qty_in_Whse_Pick > 0; KVT_Qty_Picked > 0 is deels gepickt,
- * KVT_Completely_Picked is gepickt, anders de neutrale M-tekst.
- */
-function elpis_line_material_status_label(array $line): string
+/** Statustekst voor de statuskolom. */
+function elpis_line_status_text(array $line): string
 {
-    return elpis_line_material_status_group($line)['label'];
+    return elpis_line_status_group($line)['label'];
 }
 
 /**
- * Filtersleutel + tekst voor de kolom Materiaalstatus. M zonder pick:
- * de neutrale M-tekst alleen zonder reservering, PO-koppeling of ontvangst;
- * anders de ontvangsttekst (Reeds ontvangen / Te laat – PO… / PO-datum).
+ * Filtersleutel + tekst voor de statuskolom.
  *
- * @return array{key: string, label: string, filter_label: string}
+ * @return array{key: string, label: string, filter_label: string, reason: string}
  */
-function elpis_line_material_status_group(array $line): array
+function elpis_line_status_group(array $line): array
 {
     $status = elpis_line_status($line);
 
-    return ['key' => $status['key'], 'label' => $status['label'], 'filter_label' => elpis_line_status_label($status['key'])];
-}
-
-/** Tekst op basis van code en pickvelden; '' bij M zonder pick. */
-function elpis_line_material_status_pick_label(array $line): string
-{
-    $code = strtoupper(trim((string) ($line['material_status'] ?? '')));
-    if ($code === '' || !function_exists('elpis_material_status_label')) {
-        return '';
-    }
-    if ($code !== 'M') {
-        return elpis_material_status_label($code);
-    }
-    if (!empty($line['completely_picked'])) {
-        return elpis_material_status_label('G');
-    }
-    if ((float) ($line['kvt_qty_picked'] ?? 0) > 0.00001) {
-        return LOC('elpis.material_status.M_partial');
-    }
-    if ((float) ($line['kvt_qty_in_whse_pick'] ?? 0) > 0.00001) {
-        return elpis_material_status_label('M');
-    }
-
-    return '';
-}
-
-function elpis_line_is_pick_without_receipt(array $line): bool
-{
-    return false;
+    return ['key' => $status['key'], 'label' => $status['label'], 'filter_label' => elpis_line_status_label($status['key']), 'reason' => $status['reason']];
 }
 
 /** "PO12605553, 24-09-2026" (meerdere: gescheiden door "; "). */
@@ -1648,8 +1668,6 @@ function elpis_normalize_planning_line_row(array $row): array
         (float) ($row['LVS_Quantity_Order_UoM'] ?? 0),
         null
     );
-    // KVT_Status_Material wordt niet meer gebruikt: Elpis bepaalt de status zelf (elpis_line_status).
-    $materialStatus = '';
     $planning = elpis_planning_date_from_row($row);
     $line = array_merge($quantities, [
         'job_task_no' => trim((string) ($row['Job_Task_No'] ?? '')),
@@ -1680,10 +1698,6 @@ function elpis_normalize_planning_line_row(array $row): array
         'free_stock' => null,
         'receipt_state' => '',
         'covered_by_stock' => 0.0,
-        'material_status' => $materialStatus,
-        'material_status_label' => $materialStatus !== '' && function_exists('elpis_material_status_label')
-            ? elpis_material_status_label($materialStatus)
-            : '',
         'line_no' => (int) ($row['Line_No'] ?? 0),
     ]);
     $qtySource = $purchaseOrderNo !== ''
@@ -2082,20 +2096,6 @@ function elpis_fetch_planning_lines_by_projects(string $company, array $projectN
     );
 
     return $byProject;
-}
-
-function elpis_collect_material_status_codes(array $linesByProject): array
-{
-    $codes = [];
-    foreach ($linesByProject as $lines) {
-        foreach (is_array($lines) ? $lines : [] as $line) {
-            if (is_array($line)) {
-                $codes[elpis_line_status($line)['key']] = true;
-            }
-        }
-    }
-
-    return array_values(array_filter(array_keys(ELPI_LINE_STATUSES), static fn (string $key): bool => isset($codes[$key])));
 }
 
 function elpis_enrich_lines_with_inkoop_planning(string $company, array $linesByProject, int $ttl = ELPI_CACHE_TTL): array
@@ -4321,14 +4321,14 @@ function elpis_warm_odata_cache(int $ttl = ELPI_CACHE_TTL): array
 
 function elpis_line_search_blob(array $line, string $projectNo = ''): string
 {
-    $materialStatus = elpis_line_status($line)['label'];
+    $statusLabel = elpis_line_status($line)['label'];
     $parts = [
         $projectNo,
         (string) ($line['job_task_no'] ?? ''),
         (string) ($line['work_order_no'] ?? ''),
         (string) ($line['item_no'] ?? ''),
         (string) ($line['description'] ?? ''),
-        $materialStatus,
+        $statusLabel,
         (string) ($line['planning_date'] ?? ''),
         elpis_line_expected_receipt_display($line),
     ];
@@ -4542,7 +4542,7 @@ function elpis_line_tooltips(array $line): array
         'item' => '(WerkordersLines -> No)',
         'description' => '(WerkordersLines -> Description)',
         'planning_date' => '(WerkordersLines -> ' . $planningField . ')',
-        'material_status' => '(Elpis: gepicked/verbruikt, voorraad, inkoop)',
+        'line_status' => '(Elpis: gepicked/verbruikt, voorraad, inkoop)',
         'to_order' => '(WerkordersLines -> Quantity)',
         'ordered' => '(PurchaseLines -> Quantity)',
         'open' => '(PurchaseLines -> Outstanding_Quantity)',
@@ -4564,12 +4564,7 @@ function elpis_format_qty(float $value): string
 function elpis_line_public_payload(array $line, string $projectNo): array
 {
     $line = elpis_refresh_receipt_state($line);
-    $materialStatus = (string) ($line['material_status'] ?? '');
-    $materialGroup = elpis_line_material_status_group($line);
-    $materialLabel = $materialGroup['label'];
-    if ($materialLabel === '') {
-        $materialLabel = (string) ($line['material_status_label'] ?? '');
-    }
+    $statusGroup = elpis_line_status_group($line);
 
     $freeStock = $line['free_stock'] ?? null;
     $freeDisplay = is_numeric($freeStock) ? elpis_format_qty((float) $freeStock) : '';
@@ -4582,10 +4577,10 @@ function elpis_line_public_payload(array $line, string $projectNo): array
         'description' => (string) ($line['description'] ?? ''),
         'planning_date' => elpis_format_display_date((string) ($line['planning_date'] ?? '')),
         'planning_date_sort' => elpis_normalize_bc_date((string) ($line['planning_date'] ?? '')),
-        'material_status' => $materialStatus,
-        'material_status_label' => $materialLabel,
-        'material_status_filter' => $materialGroup['key'],
-        'material_status_filter_label' => $materialGroup['filter_label'],
+        'status_label' => $statusGroup['label'],
+        'status_reason' => $statusGroup['reason'],
+        'status_filter' => $statusGroup['key'],
+        'status_filter_label' => $statusGroup['filter_label'],
         'qty_to_order' => (float) ($line['qty_to_order'] ?? 0),
         'qty_ordered' => $orderedQty,
         'qty_open' => (float) ($line['qty_open'] ?? 0),
