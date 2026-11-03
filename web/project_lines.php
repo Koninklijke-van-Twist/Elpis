@@ -80,6 +80,7 @@ try {
             'ordered' => LOC('elpis.col.ordered'),
             'open' => LOC('elpis.col.outstanding'),
             'received' => LOC('elpis.col.received'),
+            'picked' => LOC('elpis.col.picked'),
             'expected_receipt' => LOC('elpis.col.expected_receipt'),
             'stock' => LOC('elpis.col.stock'),
             'empty' => LOC('elpis.empty.lines'),

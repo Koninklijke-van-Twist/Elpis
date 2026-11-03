@@ -816,6 +816,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
      data-label-ordered="<?= elpis_h(LOC('elpis.col.ordered')) ?>"
      data-label-open="<?= elpis_h(LOC('elpis.col.outstanding')) ?>"
      data-label-received="<?= elpis_h(LOC('elpis.col.received')) ?>"
+     data-label-picked="<?= elpis_h(LOC('elpis.col.picked')) ?>"
      data-label-expected_receipt="<?= elpis_h(LOC('elpis.col.expected_receipt')) ?>"
      data-label-stock="<?= elpis_h(LOC('elpis.col.stock')) ?>"
      data-empty="<?= elpis_h(LOC('elpis.empty.lines')) ?>"
@@ -1437,12 +1438,13 @@ $projects = elpis_sort_projects_for_display($projects, []);
             ['ordered', label('ordered'), sample.ordered],
             ['open', label('open'), sample.open],
             ['received', label('received'), sample.received],
+            ['picked', label('picked'), ''],
             ['expected_receipt', label('expected_receipt'), sample.expected_receipt],
             ['stock', label('stock'), sample.stock]
         ];
         var html = '<div class="elpis-table-wrap"><table class="elpis-table"><thead><tr>';
         headers.forEach(function (header) {
-            var numeric = header[0] === 'to_order' || header[0] === 'ordered' || header[0] === 'open' || header[0] === 'received' || header[0] === 'stock';
+            var numeric = header[0] === 'to_order' || header[0] === 'ordered' || header[0] === 'open' || header[0] === 'received' || header[0] === 'picked' || header[0] === 'stock';
             html += '<th' + (numeric ? ' class="num"' : '') + '><button type="button" class="elpis-sort-btn' + (numeric ? ' num' : '') + '" data-sort-key="' + header[0] + '" title="' + esc(header[2] || '') + '">' + esc(header[1]) + '</button></th>';
         });
         html += '</tr></thead><tbody>';
@@ -1459,6 +1461,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
                 + ' data-sort-ordered="' + esc(line.qty_ordered) + '"'
                 + ' data-sort-open="' + esc(line.qty_open) + '"'
                 + ' data-sort-received="' + esc(line.qty_received) + '"'
+                + ' data-sort-picked="' + esc(line.qty_picked) + '"'
                 + ' data-sort-expected_receipt="' + esc(line.expected_receipt_sort || '') + '"'
                 + ' data-sort-stock="' + esc(line.free_stock_sort || '') + '">';
             function cell(text, tip, extra) {
@@ -1473,6 +1476,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
             html += cell(line.qty_ordered_display, tips.ordered, ' class="num"');
             html += cell(line.qty_open_display, tips.open, ' class="num"');
             html += cell(line.qty_received_display, tips.received, ' class="num"');
+            html += cell(line.qty_picked_display, line.qty_picked_tooltip, ' class="num"');
             html += cell(line.expected_receipt, tips.expected_receipt, ' class="date"');
             html += cell(line.free_stock_display, tips.stock, ' class="num"');
             html += '</tr>';
