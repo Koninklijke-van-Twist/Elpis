@@ -589,6 +589,13 @@ $projects = elpis_sort_projects_for_display($projects, []);
         .elpis-check input { width: auto !important; }
         .elpis-modal-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 0 12px 10px; }
         .elpis-project-item.is-problem-hidden { display: none; }
+        .elpis-combo { position: relative; display: block; }
+        .elpis-combo .elpis-manager-combo { width: 100%; padding-right: 36px; box-sizing: border-box; }
+        .elpis-combo-toggle { position: absolute; top: 0; right: 0; bottom: 0; width: 34px; border: 0; background: transparent; color: var(--kvt-perkins-blue); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .elpis-combo-list { position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 2px); max-height: 280px; overflow-y: auto; margin: 0; padding: 4px 0; list-style: none; background: #fff; border: 1px solid var(--kvt-line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.15); font-weight: 400; }
+        .elpis-combo-list[hidden] { display: none; }
+        .elpis-combo-list li { padding: 7px 12px; cursor: pointer; color: #111827; }
+        .elpis-combo-list li.is-active, .elpis-combo-list li:hover { background: var(--kvt-row-ok, #e8f8ee); }
         .elpis-manager-combo.is-invalid { border-color: var(--kvt-danger) !important; background: var(--kvt-row-alert); }
         @media (min-width: 640px) {
             .elpis-form-grid { grid-template-columns: 1fr 1fr; align-items: end; }
@@ -668,8 +675,12 @@ $projects = elpis_sort_projects_for_display($projects, []);
             70% { transform: translateY(1px) scale(0.97); }
             100% { transform: translateY(0) scale(1); }
         }
+        .elpis-projects-loading { display: flex; align-items: center; gap: 8px; color: var(--kvt-muted); margin: 8px 0; }
+        .elpis-projects-loading[hidden] { display: none; }
+        .elpis-projects-loading-spin { width: 14px; height: 14px; border: 2px solid var(--kvt-line); border-top-color: var(--kvt-main-blue); border-radius: 50%; animation: elpis-loader-spin 0.8s linear infinite; }
         .elpis-header-tools { display: flex; align-items: center; gap: 10px; }
-        .elpis-prefs-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--kvt-line); color: var(--kvt-perkins-blue); background: #fff; }
+        /* Taalwisselaar staat fixed rechtsboven (42px breed); envelop er direct links naast, zelfde regel. */
+        .elpis-prefs-btn { position: fixed; top: 12px; right: 62px; z-index: 5000; box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12); display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 30px; border-radius: 6px; border: 1px solid var(--kvt-line); color: var(--kvt-perkins-blue); background: #fff; }
         .elpis-prefs-btn:hover { border-color: var(--kvt-main-blue); }
     </style>
 </head>
@@ -704,9 +715,13 @@ $projects = elpis_sort_projects_for_display($projects, []);
             <label>
                 <?= elpis_h(LOC('elpis.label.manager')) ?>
                 <?php if ($projectManagers !== []): ?>
-                    <input type="text" class="elpis-manager-combo" data-elpis-manager-combo list="elpis-manager-options" autocomplete="off" spellcheck="false"
+                    <span class="elpis-combo">
+                    <input type="text" class="elpis-manager-combo" data-elpis-manager-combo role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="elpis-manager-list" autocomplete="off" spellcheck="false"
                            value="<?= elpis_h(elpis_is_all_managers_selection($projectManager) ? LOC('elpis.manager.all') : ($projectManager !== '' ? elpis_format_manager_label($projectManager) : '')) ?>"
                            data-invalid-title="<?= elpis_h(LOC('elpis.manager.invalid')) ?>">
+                    <button type="button" class="elpis-combo-toggle" data-elpis-combo-toggle tabindex="-1" aria-label="<?= elpis_h(LOC('elpis.label.manager')) ?>"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+                    <ul class="elpis-combo-list" id="elpis-manager-list" role="listbox" hidden></ul>
+                    </span>
                     <datalist id="elpis-manager-options">
                         <option value="<?= elpis_h(LOC('elpis.manager.all')) ?>" data-value="<?= elpis_h(ELPI_MANAGER_ALL) ?>"></option>
                         <?php foreach ($projectManagers as $managerOption): ?>
@@ -769,6 +784,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
                     </label>
                     <p id="elpis-search-empty" class="elpis-muted elpis-search-empty"><?= elpis_h(LOC('elpis.empty.search')) ?></p>
                 </div>
+                <p id="elpis-projects-loading" class="elpis-projects-loading" role="status" aria-live="polite"><span class="elpis-projects-loading-spin" aria-hidden="true"></span> <?= elpis_h(LOC('elpis.loading.projects')) ?></p>
+                <?php if (function_exists('ob_get_level')) { while (ob_get_level() > 0) { @ob_end_flush(); } } @flush(); ?>
                 <ul class="elpis-project-list" id="elpis-project-list">
                     <?php foreach ($projects as $projectIndex => $project): ?>
                         <?php
@@ -857,6 +874,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
      data-label-open="<?= elpis_h(LOC('elpis.col.outstanding')) ?>"
      data-label-received="<?= elpis_h(LOC('elpis.col.received')) ?>"
      data-label-picked="<?= elpis_h(LOC('elpis.col.picked')) ?>"
+     data-label-needed="<?= elpis_h(LOC('elpis.col.needed')) ?>"
      data-label-expected_receipt="<?= elpis_h(LOC('elpis.col.expected_receipt')) ?>"
      data-label-stock="<?= elpis_h(LOC('elpis.col.stock')) ?>"
      data-empty="<?= elpis_h(LOC('elpis.empty.lines')) ?>"
@@ -1271,6 +1289,100 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
         managerCombo.addEventListener('input', function () {
             managerCombo.classList.remove('is-invalid');
+            openComboList(managerCombo.value);
+        });
+        // Eigen dropdown (datalist filtert in Chrome op de huidige waarde): pijltje = veld leeg + alle opties.
+        // Leegmaken wijzigt het filter niet; zonder keuze (Escape/klik ernaast) komt de oude waarde terug.
+        var comboList = document.getElementById('elpis-manager-list');
+        var comboToggle = filterForm.querySelector('[data-elpis-combo-toggle]');
+        var comboOptions = Array.prototype.map.call(document.querySelectorAll('#elpis-manager-options option'), function (o) { return o.value; });
+        var comboRestore = null;
+        var comboActive = -1;
+        function comboItems() {
+            return comboList ? Array.prototype.slice.call(comboList.querySelectorAll('li')) : [];
+        }
+        function setComboActive(index) {
+            var items = comboItems();
+            comboActive = items.length ? (index + items.length) % items.length : -1;
+            items.forEach(function (li, i) {
+                li.classList.toggle('is-active', i === comboActive);
+                li.setAttribute('aria-selected', i === comboActive ? 'true' : 'false');
+            });
+            if (comboActive >= 0) {
+                items[comboActive].scrollIntoView({ block: 'nearest' });
+            }
+        }
+        function openComboList(filter) {
+            if (!comboList) {
+                return;
+            }
+            var q = String(filter || '').trim().toLowerCase();
+            comboList.innerHTML = '';
+            comboOptions.filter(function (v) { return q === '' || v.toLowerCase().indexOf(q) !== -1; }).forEach(function (v) {
+                var li = document.createElement('li');
+                li.setAttribute('role', 'option');
+                li.textContent = v;
+                li.addEventListener('mousedown', function (event) {
+                    event.preventDefault();
+                    pickCombo(v);
+                });
+                comboList.appendChild(li);
+            });
+            comboList.hidden = comboList.children.length === 0;
+            managerCombo.setAttribute('aria-expanded', comboList.hidden ? 'false' : 'true');
+            comboActive = -1;
+        }
+        function closeComboList(restore) {
+            if (comboList) {
+                comboList.hidden = true;
+            }
+            managerCombo.setAttribute('aria-expanded', 'false');
+            if (restore && comboRestore !== null && managerCombo.value.trim() === '') {
+                managerCombo.value = comboRestore;
+                managerCombo.classList.remove('is-invalid');
+            }
+            comboRestore = null;
+        }
+        function pickCombo(value) {
+            comboRestore = null;
+            managerCombo.value = value;
+            closeComboList(false);
+            managerCombo.dispatchEvent(new Event('change'));
+        }
+        if (comboToggle) {
+            comboToggle.addEventListener('mousedown', function (event) {
+                event.preventDefault();
+            });
+            comboToggle.addEventListener('click', function () {
+                if (comboList && !comboList.hidden) {
+                    closeComboList(true);
+                    return;
+                }
+                comboRestore = managerCombo.value;
+                managerCombo.value = '';
+                managerCombo.classList.remove('is-invalid');
+                managerCombo.focus();
+                openComboList('');
+            });
+        }
+        managerCombo.addEventListener('keydown', function (event) {
+            var open = comboList && !comboList.hidden;
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (!open) {
+                    openComboList(managerCombo.value);
+                }
+                setComboActive(comboActive + (event.key === 'ArrowDown' ? 1 : -1));
+            } else if (event.key === 'Enter' && open && comboActive >= 0) {
+                event.preventDefault();
+                pickCombo(comboItems()[comboActive].textContent);
+            } else if (event.key === 'Escape' && open) {
+                event.preventDefault();
+                closeComboList(true);
+            }
+        });
+        managerCombo.addEventListener('blur', function () {
+            closeComboList(true);
         });
     }
 
@@ -1389,6 +1501,13 @@ $projects = elpis_sort_projects_for_display($projects, []);
             return opener.getAttribute('data-project-label') || projectNo;
         }
         return projectNo;
+    }
+
+    function setProjectsLoading(on) {
+        var el = document.getElementById('elpis-projects-loading');
+        if (el) {
+            el.hidden = !on;
+        }
     }
 
     function applyProjectFilters() {
@@ -1752,7 +1871,13 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
     }
     if (projectsProblemsOnly) {
-        projectsProblemsOnly.addEventListener('change', applyProjectFilters);
+        projectsProblemsOnly.addEventListener('change', function () {
+            setProjectsLoading(true);
+            window.requestAnimationFrame(function () {
+                applyProjectFilters();
+                setProjectsLoading(false);
+            });
+        });
     }
     if (exportButton) {
         exportButton.addEventListener('click', function () {
@@ -1762,12 +1887,12 @@ $projects = elpis_sort_projects_for_display($projects, []);
             function label(name) {
                 return modal ? (modal.getAttribute('data-label-' + name) || name) : name;
             }
-            var keys = ['workorder', 'item', 'description', 'planning_date', 'material_status', 'to_order', 'ordered', 'open', 'received', 'picked', 'expected_receipt', 'stock'];
+            var keys = ['workorder', 'item', 'description', 'planning_date', 'material_status', 'to_order', 'ordered', 'open', 'received', 'needed', 'picked', 'expected_receipt', 'stock'];
             var rows = currentLines.filter(lineVisible).map(function (line) {
                 var num = function (v) { var n = parseFloat(v); return isFinite(n) ? n : ''; };
                 return [line.work_order_no || '', line.item_no || '', line.description || '', line.planning_date || '',
                     line.material_status_label || '', num(line.qty_to_order), num(line.qty_ordered), num(line.qty_open),
-                    num(line.qty_received), line.qty_picked_display || '', line.expected_receipt || '', num(line.free_stock_sort)];
+                    num(line.qty_received), num(line.qty_needed), num(line.qty_picked), line.expected_receipt || '', num(line.free_stock_sort)];
             });
             window.ElpisXlsx.download('elpis-' + (currentProject || 'project') + '.xlsx', keys.map(label), rows, currentProject || 'Elpis');
         });
@@ -1780,6 +1905,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
     }
     applyProjectFilters();
+    setProjectsLoading(false);
     projectHistory.seed();
     projectHistory.install();
 
