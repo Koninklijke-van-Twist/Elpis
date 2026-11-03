@@ -563,6 +563,18 @@ $projects = elpis_sort_projects_for_display($projects, []);
         .elpis-status-filter { position: relative; }
         .elpis-status-popover { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; min-width: 260px; max-width: 90vw; background: #fff; border: 1px solid var(--kvt-line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 10px; display: grid; gap: 8px; }
         .elpis-status-popover[hidden] { display: none; }
+        .elpis-status-info { max-width: min(520px, 86vw); max-height: 50vh; overflow-y: auto; font-size: 0.9rem; border-top: 1px solid var(--kvt-line); padding-top: 8px; }
+        .elpis-status-info[hidden] { display: none; }
+        .elpis-status-info dl { margin: 0; display: grid; gap: 2px; }
+        .elpis-status-info dt { font-weight: 700; margin-top: 6px; display: flex; align-items: center; gap: 6px; }
+        .elpis-status-info dd { margin: 0 0 0 18px; color: var(--kvt-muted); }
+        .elpis-status-info-tones { margin: 0; }
+        .elpis-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(0,0,0,.25); flex: none; }
+        .elpis-dot--ok { background: #22c55e; }
+        .elpis-dot--orange { background: #f97316; }
+        .elpis-dot--alert { background: var(--kvt-danger); }
+        .elpis-dot--muted { background: #9ca3af; }
+        .elpis-dot--warn { background: #facc15; }
         .elpis-status-options { display: grid; gap: 4px; }
         .elpis-modal-toolbar label.elpis-status-option { display: flex; gap: 8px; align-items: center; font-weight: 600; color: #111827; padding: 4px 8px; border-radius: 8px; }
         .elpis-status-popover-actions { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -899,8 +911,18 @@ $projects = elpis_sort_projects_for_display($projects, []);
                     <div id="elpis-status-options" class="elpis-status-options"></div>
                     <div class="elpis-status-popover-actions">
                         <button type="button" class="elpis-btn elpis-btn--compact" id="elpis-status-problems-only"><?= elpis_h(LOC('elpis.label.problems_only')) ?></button>
+                        <button type="button" class="elpis-btn elpis-btn--compact" id="elpis-status-info-btn" aria-expanded="false" aria-controls="elpis-status-info"><?= elpis_h(LOC('elpis.btn.status_info')) ?></button>
                         <button type="button" class="elpis-btn elpis-btn--compact" id="elpis-status-popover-close"><?= elpis_h(LOC('elpis.btn.close')) ?></button>
                     </div>
+                    <section id="elpis-status-info" class="elpis-status-info" tabindex="-1" aria-label="<?= elpis_h(LOC('elpis.status_info.title')) ?>" hidden>
+                        <p class="elpis-status-info-tones"><?= elpis_h(LOC('elpis.status_info.tones')) ?></p>
+                        <dl>
+                            <?php foreach (elpis_line_status_info() as $statusInfo): ?>
+                                <dt><span class="elpis-dot elpis-dot--<?= elpis_h($statusInfo['tone']) ?>" aria-hidden="true"></span> <?= elpis_h($statusInfo['label']) ?></dt>
+                                <dd><?= elpis_h($statusInfo['description']) ?></dd>
+                            <?php endforeach; ?>
+                        </dl>
+                    </section>
                 </div>
             </div>
         </div>
@@ -1483,6 +1505,31 @@ $projects = elpis_sort_projects_for_display($projects, []);
     var statusCount = document.getElementById('elpis-status-filter-count');
     var statusProblemsBtn = document.getElementById('elpis-status-problems-only');
     var statusPopoverClose = document.getElementById('elpis-status-popover-close');
+    var statusInfoBtn = document.getElementById('elpis-status-info-btn');
+    var statusInfo = document.getElementById('elpis-status-info');
+    function setStatusInfo(open) {
+        if (!statusInfo || !statusInfoBtn) {
+            return;
+        }
+        statusInfo.hidden = !open;
+        statusInfoBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+            statusInfo.focus();
+        }
+    }
+    if (statusInfoBtn && statusInfo) {
+        statusInfoBtn.addEventListener('click', function () {
+            setStatusInfo(statusInfo.hidden);
+        });
+        statusInfo.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                setStatusInfo(false);
+                statusInfoBtn.focus();
+            }
+        });
+    }
     var availableStatuses = [];
     var desiredStatus = '';
     var refreshButton = document.querySelector('[data-elpis-refresh]');
@@ -1495,7 +1542,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
     var projectsProblemsOnly = document.getElementById('elpis-projects-problems-only');
     var exportButton = document.querySelector('[data-elpis-export]');
         var optClass = { alert: 'elpis-opt-alert', orange: 'elpis-opt-orange', warn: 'elpis-opt-warn', ok: 'elpis-opt-ok', muted: 'elpis-opt-muted' };
-        var optBg = { alert: '#fdebec', orange: '#ffedd5', warn: '#fff8db', ok: '#e8f8ee', muted: '#f3f4f6' };
+        var optBg = { alert: '#fbb3b7', orange: '#ffedd5', warn: '#fff8db', ok: '#e8f8ee', muted: '#f3f4f6' };
 
     function normalizeSearchQuery(value) {
         return String(value || '').toLowerCase().trim();
@@ -1668,6 +1715,9 @@ $projects = elpis_sort_projects_for_display($projects, []);
             return;
         }
         statusPopover.hidden = !open;
+        if (!open) {
+            setStatusInfo(false);
+        }
         statusFilterBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
 
@@ -1888,6 +1938,18 @@ $projects = elpis_sort_projects_for_display($projects, []);
     if (statusPopoverClose) {
         statusPopoverClose.addEventListener('click', function () {
             setStatusPopover(false);
+        });
+    }
+    if (statusPopover) {
+        statusPopover.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                setStatusPopover(false);
+                if (statusFilterBtn) {
+                    statusFilterBtn.focus();
+                }
+            }
         });
     }
     if (statusProblemsBtn) {

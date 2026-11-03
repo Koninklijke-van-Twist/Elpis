@@ -71,30 +71,31 @@ const ELPI_STATUS_LATE = 'LATE';
  * Kleuren (Tim, punt N): groen = alles OK, oranje = aandacht, rood = echt probleem,
  * grijs = buiten beschouwing. Probleemregel (knop, overzichtsfilter, PM-mail) = oranje + rood.
  *  - label:         LOC-sleutel
+ *  - description:   LOC-sleutel uitleg (Info-knop in de statusfilter)
  *  - tone:          ok (groen) / orange (oranje) / alert (rood) / muted (grijs)
  *  - problem:       telt als probleemregel
  *  - receipt_state: oude receipt_state-code (mailvoorkeur late/unconfirmed, nightly-telling)
  */
 const ELPI_LINE_STATUSES = [
-    'RETURN' => ['label' => 'elpis.status.return', 'tone' => 'muted', 'problem' => false, 'receipt_state' => 'not_required'],
-    'CLOSED' => ['label' => 'elpis.status.closed', 'tone' => 'muted', 'problem' => false, 'receipt_state' => 'not_required'],
-    'PICKED' => ['label' => 'elpis.status.picked', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'received'],
-    'LATE' => ['label' => 'elpis.status.late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
-    'DELIVERY_LATE' => ['label' => 'elpis.status.delivery_late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
-    'ORDER_TOO_LATE' => ['label' => 'elpis.status.order_too_late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
-    'NO_DATE' => ['label' => 'elpis.status.no_date', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'unconfirmed'],
-    'TO_ORDER' => ['label' => 'elpis.status.to_order', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'unconfirmed'],
+    'RETURN' => ['label' => 'elpis.status.return', 'description' => 'elpis.status_info.return', 'tone' => 'muted', 'problem' => false, 'receipt_state' => 'not_required'],
+    'CLOSED' => ['label' => 'elpis.status.closed', 'description' => 'elpis.status_info.closed', 'tone' => 'muted', 'problem' => false, 'receipt_state' => 'not_required'],
+    'PICKED' => ['label' => 'elpis.status.picked', 'description' => 'elpis.status_info.picked', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'received'],
+    'LATE' => ['label' => 'elpis.status.late', 'description' => 'elpis.status_info.late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
+    'DELIVERY_LATE' => ['label' => 'elpis.status.delivery_late', 'description' => 'elpis.status_info.delivery_late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
+    'ORDER_TOO_LATE' => ['label' => 'elpis.status.order_too_late', 'description' => 'elpis.status_info.order_too_late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
+    'NO_DATE' => ['label' => 'elpis.status.no_date', 'description' => 'elpis.status_info.no_date', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'unconfirmed'],
+    'TO_ORDER' => ['label' => 'elpis.status.to_order', 'description' => 'elpis.status_info.to_order', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'unconfirmed'],
     // R: al ontvangen, ligt nog in bin INBOUND (locatie KVT); magazijn moet het nog klaarleggen voor pick.
-    'INBOUND' => ['label' => 'elpis.status.inbound', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
+    'INBOUND' => ['label' => 'elpis.status.inbound', 'description' => 'elpis.status_info.inbound', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
     // Deels gepicked, rest al ontvangen/gereserveerd voor dit project: nog picken.
-    'PARTIAL_RECEIVED' => ['label' => 'elpis.status.partial_received', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
-    'PARTIAL_STOCK' => ['label' => 'elpis.status.partial_stock', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
-    'PARTIAL_ORDERED' => ['label' => 'elpis.status.partial_ordered', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'date'],
-    'ORDERED' => ['label' => 'elpis.status.ordered', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'date'],
+    'PARTIAL_RECEIVED' => ['label' => 'elpis.status.partial_received', 'description' => 'elpis.status_info.partial_received', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
+    'PARTIAL_STOCK' => ['label' => 'elpis.status.partial_stock', 'description' => 'elpis.status_info.partial_stock', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
+    'PARTIAL_ORDERED' => ['label' => 'elpis.status.partial_ordered', 'description' => 'elpis.status_info.partial_ordered', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'date'],
+    'ORDERED' => ['label' => 'elpis.status.ordered', 'description' => 'elpis.status_info.ordered', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'date'],
     // Gedekt door ontvangst/reservering/projectvoorraad voor dit project (niet vrije voorraad): nog picken.
-    'RECEIVED_TO_PICK' => ['label' => 'elpis.status.received_to_pick', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
+    'RECEIVED_TO_PICK' => ['label' => 'elpis.status.received_to_pick', 'description' => 'elpis.status_info.received_to_pick', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
     // Alleen als (een deel van) de dekking uit vrije voorraad komt (kolom Voorraad > 0).
-    'STOCK' => ['label' => 'elpis.status.stock', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
+    'STOCK' => ['label' => 'elpis.status.stock', 'description' => 'elpis.status_info.stock', 'tone' => 'orange', 'problem' => true, 'receipt_state' => 'stock'],
 ];
 
 /**
@@ -148,6 +149,17 @@ function elpis_line_need_date(array $line): string
     $date = elpis_normalize_bc_date((string) ($line['planning_date'] ?? ''));
 
     return $date === '' ? '' : substr($date, 0, 10);
+}
+
+/** Alle statussen (centrale tabel) met label, uitleg en kleur, voor de Info-knop. */
+function elpis_line_status_info(): array
+{
+    $out = [];
+    foreach (ELPI_LINE_STATUSES as $key => $def) {
+        $out[] = ['key' => $key, 'label' => LOC($def['label']), 'description' => LOC($def['description']), 'tone' => $def['tone'], 'problem' => $def['problem']];
+    }
+
+    return $out;
 }
 
 function elpis_line_status_label(string $key): string
