@@ -343,6 +343,16 @@ if (($combined['per_company']['KVT Germany']['sent'] ?? 0) !== 1) {
     fail('per-bedrijf telling van gecombineerde mail');
 }
 
+// $blacklist uit auth.php: hoofdletterongevoelig en zonder spaties.
+$GLOBALS['blacklist'] = [' RDBoer@KVT.nl '];
+$sent = [];
+elpis_reset_fetch_memo();
+$blocked = elpis_dispatch_pm_digests($multi, $tuesday);
+if ($sent !== [] || ($blocked['sent'] ?? 0) !== 0) {
+    fail('blacklist-adres krijgt geen mail: ' . json_encode($sent));
+}
+unset($GLOBALS['blacklist']);
+
 elpis_nightly_write_state(['date' => '2026-10-20', 'status' => 'ok']);
 if (elpis_nightly_needs_run()) {
     fail('een geslaagde run van vandaag hoeft niet opnieuw');
