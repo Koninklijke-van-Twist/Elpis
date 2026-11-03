@@ -48,9 +48,9 @@ if (elpis_mail_should_send_on(['frequency' => 'never', 'weekdays' => [1, 2, 3, 4
     fail('nooit stuurt geen mail');
 }
 
-$late = ['receipt_state' => 'late', 'project_no' => 'PRJ1', 'item_no' => 'A', 'description' => 'Laat', 'work_order_no' => 'WO1', 'expected_receipt_date' => '2026-10-01'];
-$open = ['receipt_state' => 'unconfirmed', 'project_no' => 'PRJ1', 'item_no' => 'B', 'description' => 'Open', 'work_order_no' => 'WO2', 'expected_receipt_date' => ''];
-$ok = ['receipt_state' => 'date', 'project_no' => 'PRJ1', 'item_no' => 'C', 'description' => 'Ok', 'expected_receipt_date' => '2026-11-01'];
+$late = ['quantity' => 1, 'purchase_order_no' => 'IO1', 'purchase_outstanding_qty' => 1, 'receipt_state' => 'late', 'project_no' => 'PRJ1', 'item_no' => 'A', 'description' => 'Laat', 'work_order_no' => 'WO1', 'expected_receipt_date' => '2026-10-01'];
+$open = ['quantity' => 1, 'purchase_order_no' => 'IO1', 'purchase_outstanding_qty' => 1, 'receipt_state' => 'unconfirmed', 'project_no' => 'PRJ1', 'item_no' => 'B', 'description' => 'Open', 'work_order_no' => 'WO2', 'expected_receipt_date' => ''];
+$ok = ['quantity' => 1, 'purchase_order_no' => 'IO1', 'purchase_outstanding_qty' => 1, 'receipt_state' => 'date', 'project_no' => 'PRJ1', 'item_no' => 'C', 'description' => 'Ok', 'expected_receipt_date' => '2026-11-01'];
 if (!elpis_mail_line_matches_content($late, 'late') || elpis_mail_line_matches_content($open, 'late') || elpis_mail_line_matches_content($ok, 'both')) {
     fail('inhoudsfilter houdt alleen te laat en onbevestigd');
 }
@@ -177,21 +177,33 @@ if (elpis_mail_lateness_for_days(60) !== '2 maanden te laat' || elpis_mail_laten
 $oneDay = elpis_mail_join_reasons(elpis_mail_line_reasons([
     'expected_receipt_date' => '2026-10-19',
     'material_status' => 'I',
+    'quantity' => 1,
+    'purchase_order_no' => 'IO1',
+    'purchase_outstanding_qty' => 1,
     'receipt_state' => '',
 ]));
 $twoWeeks = elpis_mail_join_reasons(elpis_mail_line_reasons([
     'expected_receipt_date' => '2026-10-01',
     'material_status' => 'I',
+    'quantity' => 1,
+    'purchase_order_no' => 'IO1',
+    'purchase_outstanding_qty' => 1,
     'receipt_state' => 'late',
 ]));
 $eightWeeks = elpis_mail_join_reasons(elpis_mail_line_reasons([
     'expected_receipt_date' => '2026-08-22',
     'material_status' => 'I',
+    'quantity' => 1,
+    'purchase_order_no' => 'IO1',
+    'purchase_outstanding_qty' => 1,
     'receipt_state' => '',
 ]));
 $twoMonths = elpis_mail_join_reasons(elpis_mail_line_reasons([
     'expected_receipt_date' => '2026-08-21',
     'material_status' => 'I',
+    'quantity' => 1,
+    'purchase_order_no' => 'IO1',
+    'purchase_outstanding_qty' => 1,
     'receipt_state' => '',
 ]));
 if ($oneDay !== '1 dag te laat' || $twoWeeks !== '2 weken te laat' || $eightWeeks !== '8 weken te laat' || $twoMonths !== '2 maanden te laat') {
@@ -267,7 +279,8 @@ if (($result['sent'] ?? 0) !== 1 || count($sent) !== 1) {
     fail('een pm met treffers krijgt één mail: ' . json_encode($result));
 }
 $pc = $result['per_company']['Koninklijke van Twist'] ?? [];
-if (($pc['managers'] ?? 0) !== 1 || ($pc['recipients'] ?? 0) !== 1 || ($pc['lines'] ?? 0) !== 3
+// Punt K: alleen probleemregels tellen ($ok = groen valt al af).
+if (($pc['managers'] ?? 0) !== 1 || ($pc['recipients'] ?? 0) !== 1 || ($pc['lines'] ?? 0) !== 2
     || ($pc['lines_matched'] ?? 0) < 1 || ($pc['sent'] ?? 0) !== 1 || ($pc['no_email'] ?? -1) !== 0
     || !is_array($pc['receipt_states'] ?? null)) {
     fail('per-bedrijf telling klopt niet: ' . json_encode($pc));

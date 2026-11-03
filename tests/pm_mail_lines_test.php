@@ -59,17 +59,14 @@ if (($out['P'][0]['receipt_state'] ?? '') !== 'unconfirmed') {
     fail('zonder dekking blijft Datum ontbreekt');
 }
 
-if (!elpis_mail_line_excluded(line(['material_status' => 'V', 'inkoop_outstanding_qty' => 0.0]))) {
-    fail('V met openstaand 0 hoort niet in de mail');
+// Punt K: oude BC-uitsluiting (V, openstaand 0) vervalt; zonder dekking = probleemregel → wel in de mail.
+if (elpis_mail_line_excluded(line(['material_status' => 'V', 'inkoop_outstanding_qty' => 0.0]))) {
+    fail('regel zonder dekking hoort in de mail (punt K)');
 }
 if (elpis_mail_line_excluded(line(['material_status' => 'V', 'inkoop_outstanding_qty' => 2.0]))) {
     fail('V met openstaand 2 blijft');
 }
-foreach (['M', 'G'] as $status) {
-    if (!elpis_mail_line_excluded(line(['material_status' => $status]))) {
-        fail("$status hoort niet in de mail");
-    }
-}
+// Punt K: uitsluiting op BC-materiaalstatus (M/G/V openstaand 0) vervalt; alleen probleemregel/werkorder/blacklist.
 foreach (['Afgesloten', 'Gecontroleerd', 'Geannuleerd', 'Gefactureerd', ' afgesloten ', 'GECONTROLEERD',
     'Completed', 'Checked', 'Closed', 'Cancelled', 'Invoiced', ' closed ',
     'Uitgevoerd', ' uitgevoerd ', 'Executed', 'PERFORMED'] as $status) {
@@ -95,11 +92,8 @@ if (elpis_material_status_label('M') !== 'Pick aangemaakt') {
 
 // Ronde 3: openstaand zonder gekoppelde inkoopregel = LVS_Outstanding_Qty_Base (PRJ5260160 / WO2600161).
 $v = line(['material_status' => 'V', 'work_order_no' => 'WO2600161', 'inkoop_outstanding_qty' => 0.0]);
-if (elpis_mail_line_outstanding_qty($v) !== 0.0 || !elpis_mail_line_excluded($v)) {
-    fail('V zonder inkoopregel met LVS openstaand 0 hoort niet in de mail');
-}
-if (!elpis_mail_line_excluded(line(['material_status' => 'V', 'LVS_Outstanding_Qty_Base' => '0']))) {
-    fail('ruwe LVS_Outstanding_Qty_Base 0 telt ook');
+if (elpis_mail_line_outstanding_qty($v) !== 0.0) {
+    fail('V zonder inkoopregel met LVS openstaand 0');
 }
 if (elpis_mail_line_outstanding_qty(line(['inkoop_outstanding_qty' => 0.0, 'purchase_outstanding_qty' => 3.0])) !== 3.0) {
     fail('gekoppelde inkoopregel gaat voor LVS');

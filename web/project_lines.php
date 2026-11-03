@@ -43,25 +43,20 @@ try {
         }
         $payload = elpis_line_public_payload($line, $projectNo);
         $payloadLines[] = $payload;
-        $material = (string) ($payload['material_status_filter'] ?? '');
-        if ($material !== '' && $material !== ELPI_STATUS_LATE) {
-            $statuses[$material] = (string) ($payload['material_status_filter_label'] ?? $material);
-        }
+        $statuses[(string) ($payload['material_status_filter'] ?? '')] = true;
     }
 
+    // Statusfilter in de volgorde van de centrale tabel ELPI_LINE_STATUSES (alleen statussen die voorkomen).
     $statusList = [];
-    $statusList[] = [
-        'code' => ELPI_STATUS_LATE,
-        'label' => LOC('elpis.receipt.late'),
-        'tone' => elpis_status_tone(ELPI_STATUS_LATE),
-    ];
-    asort($statuses, SORT_NATURAL | SORT_FLAG_CASE);
-    foreach ($statuses as $code => $statusLabel) {
-        $statusList[] = [
-            'code' => (string) $code,
-            'label' => $statusLabel,
-            'tone' => elpis_status_tone(substr((string) $code, 0, 1)),
-        ];
+    foreach (ELPI_LINE_STATUSES as $code => $def) {
+        if (isset($statuses[$code])) {
+            $statusList[] = [
+                'code' => $code,
+                'label' => elpis_line_status_label($code),
+                'tone' => $def['tone'],
+                'problem' => (bool) $def['problem'],
+            ];
+        }
     }
 
     echo json_encode([
@@ -88,6 +83,9 @@ try {
             'line_search_placeholder' => LOC('elpis.placeholder.line_search'),
             'status' => LOC('elpis.label.material_status_filter'),
             'status_all' => LOC('elpis.material_status.all'),
+            'problems_only' => LOC('elpis.label.problems_only'),
+            'export_xlsx' => LOC('elpis.btn.export_xlsx'),
+            'needed' => LOC('elpis.col.needed'),
         ],
     ], JSON_UNESCAPED_UNICODE);
 } catch (Throwable $error) {

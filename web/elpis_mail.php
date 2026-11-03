@@ -496,22 +496,13 @@ function elpis_mail_line_outstanding_qty(array $line): ?float
 }
 
 /**
- * Regels die niet in de PM-mail horen: materiaalstatus V met openstaand 0, M of G,
- * werkorder afgesloten/gecontroleerd/geannuleerd/gefactureerd/uitgevoerd, of artikel op de uitsluitlijst
- * (excluded_item_nos in data/mail_config.json, standaard leeg).
+ * PM-mail bevat exact de probleemregels (elpis_line_is_problem, dezelfde definitie als de knop
+ * "Alleen probleemregels tonen" en het projectfilter). Daarnaast blijven gesloten werkorders
+ * en de uitsluitlijst (excluded_item_nos in data/mail_config.json) gelden.
  */
 function elpis_mail_line_excluded(array $line, array $excludedItemNos = []): bool
 {
-    $status = strtoupper(trim((string) ($line['material_status'] ?? '')));
-    $outstanding = elpis_mail_line_outstanding_qty($line);
-    if ($status === 'V' && $outstanding !== null && $outstanding <= 0.00001) {
-        return true;
-    }
-    // Ariadne: M = pick aangemaakt, G = volledig gepickt. Niet meer te bestellen.
-    if ($status === 'M' || $status === 'G') {
-        return true;
-    }
-    if (elpis_line_work_order_closed($line)) {
+    if (!elpis_line_is_problem($line) || elpis_line_work_order_closed($line)) {
         return true;
     }
     $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
@@ -595,18 +586,23 @@ function elpis_mail_lateness_for_days(int $days): string
 function elpis_mail_line_reasons(array $line, ?string $today = null): array
 {
     $today = $today ?? elpis_today();
-    $line = elpis_refresh_receipt_state($line);
+    $status = elpis_line_status($line, $today);
     $reasons = [];
-    $date = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
-    $date = $date === '' ? '' : substr($date, 0, 10);
-
-    if ($date === '') {
+    if ($status['date_missing']) {
         $reasons[] = LOC('elpis.mail.reason.missing_date');
     }
-
-    if ($date !== '' && elpis_line_is_late($line, $today)) {
-        $days = elpis_mail_late_day_count($date, $today);
+    if (in_array($status['key'], [ELPI_STATUS_LATE, 'DELIVERY_LATE'], true)) {
+        // Verstreken verwachte datum: telt vanaf die datum; anders hoeveel na de planningsdatum.
+        $need = elpis_line_need_date($line);
+        $from = $status['date'] !== '' && $status['date'] < $today ? $status['date'] : ($status['date'] === '' ? $need : '');
+        $days = $from !== '' ? elpis_mail_late_day_count($from, $today) : elpis_mail_late_day_count($need, $status['date']);
         $reasons[] = elpis_mail_lateness_for_days($days > 0 ? $days : 1);
+    }
+    if ($status['key'] === 'ORDER_TOO_LATE') {
+        $reasons[] = $status['label'];
+    }
+    if ($status['rest'] > 0.00001) {
+        $reasons[] = LOC('elpis.mail.reason.to_order', elpis_format_qty($status['rest']));
     }
 
     return $reasons;
@@ -707,7 +703,7 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
             $whenColor = 'color:#b42318;font-weight:700;';
             $noteColor = 'color:#b42318;font-weight:700;';
         } elseif ($state === 'unconfirmed') {
-            $when = LOC('elpis.receipt.missing');
+            $when = elpis_line_status($line)['key'] === 'NO_DATE' ? LOC('elpis.receipt.missing') : elpis_line_status_label('TO_ORDER');
             $rowBg = '#ffffff';
             $textColor = 'color:#111827;';
             $whenColor = 'color:#8a4b08;font-weight:700;';

@@ -1,0 +1,627 @@
+{
+ "AO-2-70000-22-13": {
+  "ile": [
+   {
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Remaining_Quantity": 15,
+    "Job_No": ""
+   },
+   {
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Remaining_Quantity": 30,
+    "Job_No": ""
+   },
+   {
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Remaining_Quantity": 109,
+    "Job_No": ""
+   },
+   {
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Remaining_Quantity": 179,
+    "Job_No": ""
+   },
+   {
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Remaining_Quantity": 20,
+    "Job_No": ""
+   },
+   {
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Remaining_Quantity": 10,
+    "Job_No": ""
+   }
+  ],
+  "res": [
+   {
+    "Entry_No": 165844,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -8,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "165619",
+    "Source_Ref_No": 20131
+   },
+   {
+    "Entry_No": 165844,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 8,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 2286
+   },
+   {
+    "Entry_No": 165854,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -7,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "12602143",
+    "Source_Ref_No": 20139
+   },
+   {
+    "Entry_No": 165854,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 7,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 2286
+   },
+   {
+    "Entry_No": 165855,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -9,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "12602143",
+    "Source_Ref_No": 20139
+   },
+   {
+    "Entry_No": 165855,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 9,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 39,
+    "Source_ID": "4500127930",
+    "Source_Ref_No": 10000
+   },
+   {
+    "Entry_No": 1285464,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -30,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 58730
+   },
+   {
+    "Entry_No": 1285464,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 30,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 12505
+   },
+   {
+    "Entry_No": 1285465,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -10,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 58730
+   },
+   {
+    "Entry_No": 1285465,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 10,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 39,
+    "Source_ID": "4500127930",
+    "Source_Ref_No": 10000
+   },
+   {
+    "Entry_No": 1285488,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -11,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 58788
+   },
+   {
+    "Entry_No": 1285488,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 11,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 39,
+    "Source_ID": "4500127930",
+    "Source_Ref_No": 10000
+   },
+   {
+    "Entry_No": 1404943,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -29,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 58788
+   },
+   {
+    "Entry_No": 1404943,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 29,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 23220
+   },
+   {
+    "Entry_No": 1404944,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 58848
+   },
+   {
+    "Entry_No": 1404944,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 23220
+   },
+   {
+    "Entry_No": 1404945,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 59009
+   },
+   {
+    "Entry_No": 1404945,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 23220
+   },
+   {
+    "Entry_No": 1676691,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -8,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606492",
+    "Source_Ref_No": 71508
+   },
+   {
+    "Entry_No": 1676691,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 8,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 27391
+   },
+   {
+    "Entry_No": 2066419,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 62115
+   },
+   {
+    "Entry_No": 2066419,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 27391
+   },
+   {
+    "Entry_No": 2066420,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -20,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 62392
+   },
+   {
+    "Entry_No": 2066420,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 20,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 27391
+   },
+   {
+    "Entry_No": 2066422,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 62175
+   },
+   {
+    "Entry_No": 2066422,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 27391
+   },
+   {
+    "Entry_No": 2066424,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 62235
+   },
+   {
+    "Entry_No": 2066424,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 40,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 27391
+   },
+   {
+    "Entry_No": 2066427,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -31,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 62324
+   },
+   {
+    "Entry_No": 2066427,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 31,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 27391
+   },
+   {
+    "Entry_No": 2066428,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -9,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "PRJ2606316",
+    "Source_Ref_No": 62324
+   },
+   {
+    "Entry_No": 2066428,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 9,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 39483
+   },
+   {
+    "Entry_No": 2328891,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -8,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "4086299",
+    "Source_Ref_No": 85121
+   },
+   {
+    "Entry_No": 2328891,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 8,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 39483
+   },
+   {
+    "Entry_No": 2447339,
+    "Positive": false,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": -2,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 1003,
+    "Source_ID": "4086299",
+    "Source_Ref_No": 87027
+   },
+   {
+    "Entry_No": 2447339,
+    "Positive": true,
+    "Item_No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "Quantity_Base": 2,
+    "Reservation_Status": "Reservering",
+    "Source_Type": 32,
+    "Source_ID": "",
+    "Source_Ref_No": 39483
+   }
+  ],
+  "pick": [
+   {
+    "Job_No": "12602143",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 16,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 20139
+   },
+   {
+    "Job_No": "165619",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 8,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 20131
+   },
+   {
+    "Job_No": "4086299",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 8,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 85121
+   },
+   {
+    "Job_No": "4086299",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 2,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 87027
+   },
+   {
+    "Job_No": "4086528",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 10,
+    "Qty_Posted": 10,
+    "Job_Contract_Entry_No": 64203
+   },
+   {
+    "Job_No": "4086528",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 20,
+    "Qty_Posted": 20,
+    "Job_Contract_Entry_No": 20776
+   },
+   {
+    "Job_No": "4086529",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 10,
+    "Qty_Posted": 10,
+    "Job_Contract_Entry_No": 64204
+   },
+   {
+    "Job_No": "4087746",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 20,
+    "Qty_Posted": 20,
+    "Job_Contract_Entry_No": 65672
+   },
+   {
+    "Job_No": "4087747",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 20,
+    "Qty_Posted": 20,
+    "Job_Contract_Entry_No": 65676
+   },
+   {
+    "Job_No": "4087747",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 7,
+    "Qty_Posted": 7,
+    "Job_Contract_Entry_No": 68648
+   },
+   {
+    "Job_No": "PRJ2606316",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 40,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 58730
+   },
+   {
+    "Job_No": "PRJ2606316",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 40,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 58788
+   },
+   {
+    "Job_No": "PRJ2606316",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 40,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 58848
+   },
+   {
+    "Job_No": "PRJ2606316",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 40,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 59009
+   },
+   {
+    "Job_No": "PRJ2606316",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 40,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 62115
+   },
+   {
+    "Job_No": "PRJ2606316",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 40,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 62175
+   },
+   {
+    "Job_No": "PRJ2606492",
+    "No": "AO-2-70000-22-13",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 8,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 71508
+   }
+  ]
+ },
+ "PI20000902": {
+  "ile": [
+   {
+    "Item_No": "PI20000902",
+    "Location_Code": "KVT",
+    "Remaining_Quantity": 25,
+    "Job_No": "12602143"
+   },
+   {
+    "Item_No": "PI20000902",
+    "Location_Code": "KVT",
+    "Remaining_Quantity": 100,
+    "Job_No": "12602143"
+   },
+   {
+    "Item_No": "PI20000902",
+    "Location_Code": "KVT",
+    "Remaining_Quantity": 50,
+    "Job_No": "12602143"
+   }
+  ],
+  "res": [],
+  "pick": [
+   {
+    "Job_No": "12602143",
+    "No": "PI20000902",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 1,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 37836
+   },
+   {
+    "Job_No": "12602143",
+    "No": "PI20000902",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 6,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 40114
+   },
+   {
+    "Job_No": "12602143",
+    "No": "PI20000902",
+    "Location_Code": "KVT",
+    "KVT_Qty_Picked": 50,
+    "Qty_Posted": 0,
+    "Job_Contract_Entry_No": 46187
+   }
+  ]
+ }
+}
