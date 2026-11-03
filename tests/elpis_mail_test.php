@@ -435,4 +435,73 @@ if (!empty($GLOBALS['ELPIS_NIGHTLY_RETRY_EMPTY'])) {
     fail('nightly zet ELPIS_NIGHTLY_RETRY_EMPTY na afloop terug');
 }
 
+// Punt P: verzenduur per gebruiker (standaard 08:00), max 1x per dag via hourly.php.
+if (elpis_default_mail_prefs()['hour'] !== 8 || elpis_normalize_mail_prefs(['hour' => '3'])['hour'] !== 8
+    || elpis_normalize_mail_prefs(['hour' => '14'])['hour'] !== 14) {
+    fail('uurvoorkeur: standaard 8, onbekend uur valt terug op 8');
+}
+foreach (['rdboer@kvt.nl', 'rdboer@kvt.de'] as $hourEmail) {
+    elpis_save_mail_prefs($hourEmail, ['frequency' => 'daily', 'content' => 'both', 'weekdays' => [1], 'hour' => 10]);
+}
+if (elpis_mail_prefs_for_email('rdboer@kvt.nl')['hour'] !== 10) {
+    fail('uurvoorkeur wordt bewaard');
+}
+@unlink(elpis_mail_sent_log_path());
+elpis_reset_fetch_memo();
+$sent = [];
+$GLOBALS['ELPIS_MAIL_SENDER'] = static function (string $to, string $subject, string $plain, string $html) use (&$sent): bool {
+    $sent[] = compact('to', 'subject', 'plain', 'html');
+
+    return true;
+};
+$r = elpis_dispatch_pm_digests($bundle, $tuesday, 9);
+if (($r['sent'] ?? 0) !== 0 || $sent !== []) {
+    fail('voor het gekozen uur gaat er niets uit: ' . json_encode($r));
+}
+$r = elpis_dispatch_pm_digests($bundle, $tuesday, 10);
+if (($r['sent'] ?? 0) !== 1 || count($sent) !== 1) {
+    fail('in het gekozen uur gaat de mail uit: ' . json_encode($r));
+}
+$r = elpis_dispatch_pm_digests($bundle, $tuesday, 11);
+if (($r['sent'] ?? 0) !== 0 || count($sent) !== 1) {
+    fail('max 1x per dag: ' . json_encode($r));
+}
+$r = elpis_dispatch_pm_digests($bundle, '2026-10-21', 12);
+if (($r['sent'] ?? 0) !== 1) {
+    fail('volgende dag (later uur, inhalen) gaat weer: ' . json_encode($r));
+}
+// hourly.php: zonder data van vandaag / buiten de uren niets.
+@unlink(elpis_digest_bundle_path());
+if ((elpis_run_hourly(10, $tuesday)['status'] ?? '') !== 'no_data' || (elpis_run_hourly(3, $tuesday)['status'] ?? '') !== 'outside_hours') {
+    fail('hourly zonder data of buiten uren stuurt niets');
+}
+elpis_write_json_file(elpis_digest_bundle_path(), ['date' => '2026-10-22', 'by_company' => $bundle]);
+$sent = [];
+$h = elpis_run_hourly(10, '2026-10-22');
+if (($h['status'] ?? '') !== 'ok' || count($sent) !== 1) {
+    fail('hourly verstuurt uit de nightly-data: ' . json_encode($h));
+}
+
+// Punt O: 'Ticket maken'-link naar Asclepius.
+$url = elpis_ticket_url(['Project', 'Artikel', 'Opmerking'], ['PRJ1', 'A|B', "regel\nnieuw"], 'A|B', 'PRJ1');
+if (!str_starts_with($url, 'https://sleutels.kvt.nl/asclepius/?new_category=Business%20Central&new_title=')) {
+    fail('ticketlink begint met de prefill-url: ' . $url);
+}
+parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+$expectBody = "| Project | Artikel | Opmerking |\n| --- | --- | --- |\n| PRJ1 | A\\|B | regel nieuw |\n\nWat moet er gebeuren: ";
+if (($q['new_title'] ?? '') !== 'A|B in PRJ1 vereist aandacht' || ($q['new_description'] ?? '') !== $expectBody || ($q['new_category'] ?? '') !== 'Business Central') {
+    fail('ticketlink inhoud: ' . json_encode($q));
+}
+if (str_contains($url, '+') || str_contains($url, ' ') || str_contains($url, "\n")) {
+    fail('ticketlink is volledig url-gecodeerd (%20, geen +)');
+}
+$long = elpis_ticket_url(['Omschrijving'], [str_repeat('x', 5000)], 'A', 'P');
+if (strlen($long) > 2000) {
+    fail('ticketlink blijft onder 2000 tekens: ' . strlen($long));
+}
+if (!str_contains($sent[0]['html'], 'Ticket maken') || !str_contains($sent[0]['html'], 'asclepius/?new_category=Business%20Central')
+    || !str_contains($sent[0]['plain'], 'Ticket maken: https://sleutels.kvt.nl/asclepius/?')) {
+    fail('elke mailregel heeft een ticketlink');
+}
+
 echo "OK\n";

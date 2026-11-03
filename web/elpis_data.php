@@ -91,17 +91,51 @@ const ELPI_LINE_STATUSES = [
 ];
 
 /**
- * Levertijd in dagen voor bestellen (placeholder: Ariadne zoekt het BC-veld uit).
- * null = onbekend → 'Te bestellen' (oranje), nooit 'Te laat besteld'.
+ * BC DateFormula ('10D', '1W', '2M', 'CM', '<1W+CM>') → aantal dagen vanaf $today. null = leeg/onleesbaar.
  */
-function elpis_line_lead_time_days(array $line): ?int
+function elpis_date_formula_days(?string $formula, ?string $today = null): ?int
 {
-    $value = $line['lead_time_days'] ?? null;
+    $formula = strtoupper(str_replace(['<', '>', ' '], '', trim((string) $formula)));
+    if ($formula === '' || !preg_match('/^([+-]?(\d*)(CM|C?[DWMQY]))+$/', $formula)) {
+        return null;
+    }
+    $base = new DateTimeImmutable(($today ?? elpis_today()) . ' 00:00:00');
+    $date = $base;
+    preg_match_all('/([+-]?)(\d*)(CM|C?[DWMQY])/', $formula, $parts, PREG_SET_ORDER);
+    foreach ($parts as [, $sign, $num, $unit]) {
+        if ($unit === 'CM') {
+            $date = $date->modify('last day of this month');
+            continue;
+        }
+        $n = ($num === '' ? 1 : (int) $num) * ($sign === '-' ? -1 : 1);
+        $unit = ltrim($unit, 'C');
+        $map = ['D' => 'day', 'W' => 'week', 'M' => 'month', 'Q' => 'month', 'Y' => 'year'];
+        $date = $date->modify(($unit === 'Q' ? $n * 3 : $n) . ' ' . $map[$unit]);
+    }
 
-    return is_numeric($value) ? (int) $value : null;
+    return (int) $base->diff($date)->format('%r%a');
 }
 
-/** Planningsdatum waartegen getoetst wordt (placeholder: juiste BC-veld volgt van Ariadne). */
+/**
+ * Levertijd in dagen (Ariadne): WerkordersLines.LVS_Critical_Lead_Time, anders AppItems.Lead_Time_Calculation.
+ * KVT_Item_Lead_Time niet gebruiken (kapot). null = onbekend → 'Te bestellen' (oranje), nooit 'Te laat besteld'.
+ */
+function elpis_line_lead_time_days(array $line, ?string $today = null): ?int
+{
+    if (is_numeric($line['lead_time_days'] ?? null)) {
+        return (int) $line['lead_time_days'];
+    }
+    foreach (['critical_lead_time', 'item_lead_time'] as $field) {
+        $days = elpis_date_formula_days((string) ($line[$field] ?? ''), $today);
+        if ($days !== null && $days >= 0 && (string) ($line[$field] ?? '') !== '') {
+            return $days;
+        }
+    }
+
+    return null;
+}
+
+/** Planningsdatum waartegen getoetst wordt: Planning_Date (bevestigd door Ariadne, = Planned_Delivery_Date). */
 function elpis_line_need_date(array $line): string
 {
     $date = elpis_normalize_bc_date((string) ($line['planning_date'] ?? ''));
@@ -403,7 +437,9 @@ function elpis_line_status(array $line, ?string $today = null): array
     $date = $date === '' ? '' : substr($date, 0, 10);
     $partial = $p > 0.00001 && $p + 0.00001 < $n;
     $need = elpis_line_need_date($line);
-    $lead = elpis_line_lead_time_days($line);
+    $lead = elpis_line_lead_time_days($line, $today);
+    $latestOrder = elpis_normalize_bc_date((string) ($line['latest_order_date'] ?? ''));
+    $latestOrder = $latestOrder === '' ? '' : substr($latestOrder, 0, 10);
     $rest = $cov['rest'];
     $notOnHand = $b > 0.00001 || $rest > 0.00001;
     $checks = [
@@ -415,8 +451,10 @@ function elpis_line_status(array $line, ?string $today = null): array
         // Verwachte ontvangst na de planningsdatum, of de verwachte datum is al verstreken.
         'DELIVERY_LATE' => $b > 0.00001 && $date !== '' && ($date < $today || ($need !== '' && $date > $need)),
         // Niets besteld en bestellen vandaag haalt de planningsdatum niet meer.
-        'ORDER_TOO_LATE' => $rest > 0.00001 && $lead !== null && $need !== ''
-            && date('Y-m-d', strtotime($today . ' +' . $lead . ' days')) > $need,
+        // LVS_Latest_Order_Date gaat voor; anders vandaag + levertijd > planningsdatum.
+        'ORDER_TOO_LATE' => $rest > 0.00001 && ($latestOrder !== ''
+            ? $today > $latestOrder
+            : ($lead !== null && $need !== '' && date('Y-m-d', strtotime($today . ' +' . $lead . ' days')) > $need)),
         'NO_DATE' => $b > 0.00001 && $date === '',
         'TO_ORDER' => $rest > 0.00001,
         'PARTIAL_STOCK' => $partial && $b <= 0.00001,
@@ -1628,6 +1666,8 @@ function elpis_normalize_planning_line_row(array $row): array
         'planning_date' => $planning['date'],
         'planning_date_field' => $planning['field'],
         'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['KVT_Expected_Receipt_Date'] ?? '')),
+        'critical_lead_time' => trim((string) ($row['LVS_Critical_Lead_Time'] ?? '')),
+        'latest_order_date' => elpis_normalize_bc_date((string) ($row['LVS_Latest_Order_Date'] ?? '')),
         'expected_receipt_source' => '',
         'received_date' => '',
         'free_stock' => null,
@@ -1869,7 +1909,7 @@ function elpis_project_nos_from_projects(array $projects): array
 
 function elpis_werkorders_line_select_fields(): string
 {
-    return 'Job_No,Job_Task_No,Line_No,Job_Contract_Entry_No,Type,No,Description,Quantity,Remaining_Qty,Reserved_Quantity,KVT_Expected_Receipt_Date,Planning_Date,Planned_Delivery_Date,LVS_Work_Order_No,LVS_Purchase_Order_No,LVS_Purchase_Order_Line_No,KVT_Qty_Picked,KVT_Completely_Picked,KVT_Qty_in_Whse_Pick,Qty_Posted,Usage_Link,Location_Code';
+    return 'Job_No,Job_Task_No,Line_No,Job_Contract_Entry_No,Type,No,Description,Quantity,Remaining_Qty,Reserved_Quantity,KVT_Expected_Receipt_Date,Planning_Date,Planned_Delivery_Date,LVS_Work_Order_No,LVS_Purchase_Order_No,LVS_Purchase_Order_Line_No,KVT_Qty_Picked,KVT_Completely_Picked,KVT_Qty_in_Whse_Pick,Qty_Posted,Usage_Link,Location_Code,LVS_Critical_Lead_Time,LVS_Latest_Order_Date';
 }
 
 function elpis_inkoop_planning_select_fields(): string
@@ -2425,7 +2465,7 @@ function elpis_item_inventory_select_fields(): string
     // AppItems.InventoryField is de artikelvoorraad. Geen Location_Code:
     // de aftrek van reserveringen geldt voor dezelfde artikelbrede voorraad.
     // Type ('Service') en LVS_Maintenance_Task_Item (taakartikel): fictieve artikelen, Elpis filtert die regels weg.
-    return 'No,InventoryField,LVS_InventoryExclJobInventory,Type,LVS_Maintenance_Task_Item';
+    return 'No,InventoryField,LVS_InventoryExclJobInventory,Type,LVS_Maintenance_Task_Item,Lead_Time_Calculation';
 }
 
 function elpis_receipt_filters_are_department_independent(string $filter): bool
@@ -2855,6 +2895,7 @@ function elpis_fetch_item_inventory(string $company, array $itemNos, int $ttl = 
             if ($no === '') {
                 continue;
             }
+            $GLOBALS['ELPIS_ITEM_LEAD_TIME'][strtoupper($no)] = trim((string) ($row['Lead_Time_Calculation'] ?? ''));
             if (($row['Type'] ?? '') === 'Service' || ($row['LVS_Maintenance_Task_Item'] ?? false) === true) {
                 $skipItems[strtoupper($no)] = true;
             }
@@ -4007,10 +4048,16 @@ function elpis_enrich_planning_lines_with_receipts(string $company, array $lines
     $context = elpis_load_receipt_context($company, $linesByProject, $ttl, $onInventoryChunk, $onPhase);
     // Taak- en serviceartikelen (AppItems) helemaal weglaten; zonder artikelinfo blijft de regel staan.
     $skip = (array) ($context['skip_items'] ?? []);
+    $leadTimes = (array) ($GLOBALS['ELPIS_ITEM_LEAD_TIME'] ?? []);
     foreach ($linesByProject as $projectNo => $lines) {
         $linesByProject[$projectNo] = array_values(array_filter((array) $lines, static function ($line) use ($skip): bool {
             return !is_array($line) || !isset($skip[strtoupper(trim((string) ($line['item_no'] ?? '')))]);
         }));
+        foreach ($linesByProject[$projectNo] as $i => $line) {
+            if (is_array($line)) {
+                $linesByProject[$projectNo][$i]['item_lead_time'] = (string) ($leadTimes[strtoupper(trim((string) ($line['item_no'] ?? '')))] ?? '');
+            }
+        }
     }
 
     return elpis_apply_receipt_expectations(

@@ -34,6 +34,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         'frequency' => $frequency,
         'content' => $content,
         'weekdays' => $weekdays,
+        'hour' => $_POST['hour'] ?? null,
     ]);
     $saved = true;
 }
@@ -120,6 +121,14 @@ for ($day = 1; $day <= 7; $day++) {
                     </label>
                 <?php endforeach; ?>
             </fieldset>
+            <label class="elpis-field">
+                <span><?= elpis_prefs_h(LOC('elpis.prefs.hour')) ?></span>
+                <select name="hour">
+                    <?php foreach (ELPIS_MAIL_HOURS as $hourOption): ?>
+                        <option value="<?= (int) $hourOption ?>"<?= $prefs['hour'] === $hourOption ? ' selected' : '' ?>><?= sprintf('%02d:00', $hourOption) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
             <button class="elpis-btn" type="submit"><?= elpis_prefs_h(LOC('elpis.prefs.save')) ?></button>
         </form>
         <p><a class="elpis-back" href="index.php"><?= elpis_prefs_h(LOC('elpis.prefs.back')) ?></a></p>

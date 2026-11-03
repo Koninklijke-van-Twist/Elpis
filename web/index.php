@@ -662,13 +662,19 @@ $projects = elpis_sort_projects_for_display($projects, []);
             70% { transform: translateY(1px) scale(0.97); }
             100% { transform: translateY(0) scale(1); }
         }
+        .elpis-header-tools { display: flex; align-items: center; gap: 10px; }
+        .elpis-prefs-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--kvt-line); color: var(--kvt-perkins-blue); background: #fff; }
+        .elpis-prefs-btn:hover { border-color: var(--kvt-main-blue); }
     </style>
 </head>
 <body>
 <div class="elpis-page">
     <header class="elpis-header">
         <img src="logo-website.png" alt="KVT">
-        <?php renderLanguageSwitcher(); ?>
+        <div class="elpis-header-tools">
+            <a class="elpis-prefs-btn" href="voorkeuren.php" title="<?= htmlspecialchars(LOC('elpis.prefs.title'), ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars(LOC('elpis.prefs.title'), ENT_QUOTES, 'UTF-8') ?>"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></a>
+            <?php renderLanguageSwitcher(); ?>
+        </div>
     </header>
 
     <section class="elpis-card elpis-card--hero">
