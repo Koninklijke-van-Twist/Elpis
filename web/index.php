@@ -1304,6 +1304,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
                 return;
             }
             managerCombo.value = match.value;
+            comboChosen = match.value;
             if (managerSelect.value !== match.getAttribute('data-value')) {
                 managerSelect.value = match.getAttribute('data-value') || '';
                 managerSelect.dispatchEvent(new Event('change'));
@@ -1320,6 +1321,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
         var comboOptions = Array.prototype.map.call(document.querySelectorAll('#elpis-manager-options option'), function (o) { return o.value; });
         var comboRestore = null;
         var comboActive = -1;
+        // Laatst gekozen waarde (bij laden, klik of Enter); Escape zet altijd deze terug.
+        var comboChosen = null;
         function comboItems() {
             return comboList ? Array.prototype.slice.call(comboList.querySelectorAll('li')) : [];
         }
@@ -1363,8 +1366,11 @@ $projects = elpis_sort_projects_for_display($projects, []);
             });
             return label;
         }
+        if (comboChosen === null) {
+            comboChosen = chosenComboLabel() || managerCombo.value;
+        }
         function restoreCombo() {
-            managerCombo.value = chosenComboLabel();
+            managerCombo.value = comboChosen !== null ? comboChosen : chosenComboLabel();
             managerCombo.classList.remove('is-invalid');
             managerCombo.title = '';
             closeComboList(false);
@@ -1375,35 +1381,43 @@ $projects = elpis_sort_projects_for_display($projects, []);
             }
             managerCombo.setAttribute('aria-expanded', 'false');
             if (restore && managerCombo.value.trim() === '') {
-                managerCombo.value = comboRestore !== null ? comboRestore : chosenComboLabel();
+                managerCombo.value = comboRestore !== null ? comboRestore : (comboChosen !== null ? comboChosen : chosenComboLabel());
                 managerCombo.classList.remove('is-invalid');
             }
             comboRestore = null;
         }
         function pickCombo(value) {
             comboRestore = null;
+            comboChosen = value;
             managerCombo.value = value;
             closeComboList(false);
             managerCombo.dispatchEvent(new Event('change'));
         }
-        // Pijltje: altijd leegmaken, ook bij de eerste klik na reload. Op pointerdown (vóór focus/click),
-        // zodat focus of een herstelde formulierwaarde de leegmaak niet kan overschrijven.
+        // Pijltje: elke klik maakt het veld leeg en toont alle opties, ongeacht focus of open lijst.
+        // mousedown + preventDefault houdt de focus in de input, dus geen blur-reset tussendoor.
         function toggleCombo(event) {
             event.preventDefault();
             event.stopPropagation();
-            if (comboList && !comboList.hidden) {
-                closeComboList(true);
-                return;
-            }
-            comboRestore = chosenComboLabel() || managerCombo.value;
+            comboRestore = comboChosen !== null && comboChosen !== '' ? comboChosen : (chosenComboLabel() || managerCombo.value);
             managerCombo.value = '';
             managerCombo.classList.remove('is-invalid');
-            managerCombo.focus();
-            managerCombo.value = '';
+            managerCombo.title = '';
+            if (document.activeElement !== managerCombo) {
+                managerCombo.focus();
+                managerCombo.value = '';
+            }
             openComboList('');
         }
         if (comboToggle) {
-            comboToggle.addEventListener(window.PointerEvent ? 'pointerdown' : 'mousedown', toggleCombo);
+            comboToggle.addEventListener('mousedown', toggleCombo);
+            if (window.PointerEvent) {
+                // Alleen focusverlies voorkomen; de actie zelf zit op mousedown (één keer per klik).
+                comboToggle.addEventListener('pointerdown', function (event) {
+                    if (event.pointerType === 'touch' || event.pointerType === 'pen') {
+                        toggleCombo(event);
+                    }
+                });
+            }
             comboToggle.addEventListener('click', function (event) {
                 event.preventDefault();
             });
