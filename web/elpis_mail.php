@@ -756,6 +756,17 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
     return [$subject, $plain, $html];
 }
 
+/**
+ * $blacklist uit auth.php (top-level require, dus globaal): adressen die nooit
+ * een Elpis-mail krijgen. Ontbreekt de variabele, dan is de lijst leeg.
+ */
+function elpis_mail_is_blacklisted(string $email): bool
+{
+    $normalize = static fn($value): string => strtolower(preg_replace('/\s+/', '', (string) $value));
+    $list = array_map($normalize, (array) ($GLOBALS['blacklist'] ?? []));
+    return $email !== '' && in_array($normalize($email), $list, true);
+}
+
 function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): array
 {
     $today = $today ?? elpis_today();
@@ -869,6 +880,11 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
     foreach ($pending as $manager => $lines) {
         $intended = $chosenEmail[$manager] ?? '';
         $recipient = $testMode ? (string) $config['test_recipient'] : $intended;
+        if (elpis_mail_is_blacklisted($intended) || elpis_mail_is_blacklisted($recipient)) {
+            $skipped++;
+            $details[] = ['company' => implode(', ', array_values(array_unique(array_column($lines, 'company')))), 'manager' => $manager, 'status' => 'blacklist'];
+            continue;
+        }
         [$subject, $plain, $html] = elpis_digest_message($manager, $intended, $lines, $testMode);
         $ok = elpis_mail_send($recipient, $subject, $plain, $html);
         $sent += $ok ? 1 : 0;

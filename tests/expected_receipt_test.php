@@ -1820,4 +1820,25 @@ $uomLines = elpis_apply_purchase_uom('X', [
     elpis_normalize_purchase_order_line(['Document_No'=>'P','Line_No'=>1,'No'=>'I2','Quantity'=>2,'Outstanding_Quantity'=>2,'Unit_of_Measure_Code'=>'']),
 ]);
 if ($uomLines[0]['quantity'] !== 3.0 || $uomLines[1]['quantity'] !== 2.0 || $uomLines[1]['uom_factor'] !== 1.0) { echo "FAIL uom default 1\n"; exit(1); }
+// Taak- (LVS_Maintenance_Task_Item) en serviceartikelen (Type 'Service') vallen weg; zonder artikelinfo blijft de regel staan.
+$GLOBALS['ELPIS_FETCH_OBSERVER'] = static function (string $company, string $entity, array $query): array {
+    if ($entity === ELPI_ITEM_LIST_ENTITY) {
+        if (!str_contains((string) $query['$select'], 'LVS_Maintenance_Task_Item') || !str_contains((string) $query['$select'], 'Type')) {
+            fail('AppItems select mist Type/LVS_Maintenance_Task_Item');
+        }
+        return [
+            ['No' => 'PD', 'InventoryField' => 0, 'Type' => 'Voorraad', 'LVS_Maintenance_Task_Item' => true],
+            ['No' => 'KO-EMERG', 'InventoryField' => 0, 'Type' => 'Service', 'LVS_Maintenance_Task_Item' => false],
+            ['No' => 'I1', 'InventoryField' => 1, 'Type' => 'Voorraad', 'LVS_Maintenance_Task_Item' => false],
+        ];
+    }
+    return [];
+};
+elpis_reset_fetch_memo();
+$kept = elpis_enrich_planning_lines_with_receipts('Koninklijke van Twist', ['PRJ1' => [
+    planningLine(['item_no' => 'PD']), planningLine(['item_no' => 'KO-EMERG']), planningLine(['item_no' => 'I1']), planningLine(['item_no' => 'ONBEKEND']),
+]]);
+if (array_column($kept['PRJ1'] ?? [], 'item_no') !== ['I1', 'ONBEKEND']) {
+    fail('taak/service-filter: ' . json_encode(array_column($kept['PRJ1'] ?? [], 'item_no')));
+}
 echo "OK\n";
