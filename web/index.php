@@ -418,6 +418,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
             font-weight: 700;
             line-height: 1.35;
         }
+        .elpis-execution-from.elpis-opt-orange { background: var(--kvt-row-orange); color: #9a3412; }
         .elpis-execution-from.is-missing { background: #fff4e5; color: #8a4b08; }
         .elpis-receipt--stock { color: #0f6b3c; font-weight: 700; }
         .elpis-receipt--missing { color: #8a4b08; font-weight: 700; }
@@ -574,6 +575,15 @@ $projects = elpis_sort_projects_for_display($projects, []);
         table.elpis-table tbody tr.elpis-row--orange { background: var(--kvt-row-orange); }
         table.elpis-table tbody tr.elpis-row--warn { background: var(--kvt-row-warn); }
         table.elpis-table tbody tr.elpis-row--ok { background: var(--kvt-row-ok); }
+        table.elpis-table tbody tr.elpis-row--muted { background: #f3f4f6; color: var(--kvt-muted); }
+        /* D: kolomkoppen blijven staan bij scrollen in de modal */
+        .elpis-modal-body .elpis-table-wrap { overflow: visible; }
+        .elpis-modal-body table.elpis-table thead th { position: sticky; top: 0; z-index: 2; }
+        .elpis-check { display: flex !important; align-items: center; gap: 8px; font-weight: 600; }
+        .elpis-check input { width: auto !important; }
+        .elpis-modal-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 0 12px 10px; }
+        .elpis-project-item.is-problem-hidden { display: none; }
+        .elpis-manager-combo.is-invalid { border-color: var(--kvt-danger) !important; background: var(--kvt-row-alert); }
         @media (min-width: 640px) {
             .elpis-form-grid { grid-template-columns: 1fr 1fr; align-items: end; }
             .elpis-project-toolbar-filters { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: end; }
@@ -652,13 +662,19 @@ $projects = elpis_sort_projects_for_display($projects, []);
             70% { transform: translateY(1px) scale(0.97); }
             100% { transform: translateY(0) scale(1); }
         }
+        .elpis-header-tools { display: flex; align-items: center; gap: 10px; }
+        .elpis-prefs-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--kvt-line); color: var(--kvt-perkins-blue); background: #fff; }
+        .elpis-prefs-btn:hover { border-color: var(--kvt-main-blue); }
     </style>
 </head>
 <body>
 <div class="elpis-page">
     <header class="elpis-header">
         <img src="logo-website.png" alt="KVT">
-        <?php renderLanguageSwitcher(); ?>
+        <div class="elpis-header-tools">
+            <a class="elpis-prefs-btn" href="voorkeuren.php" title="<?= htmlspecialchars(LOC('elpis.prefs.title'), ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars(LOC('elpis.prefs.title'), ENT_QUOTES, 'UTF-8') ?>"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></a>
+            <?php renderLanguageSwitcher(); ?>
+        </div>
     </header>
 
     <section class="elpis-card elpis-card--hero">
@@ -681,7 +697,18 @@ $projects = elpis_sort_projects_for_display($projects, []);
             <?php if ($companyChosen): ?>
             <label>
                 <?= elpis_h(LOC('elpis.label.manager')) ?>
-                <select name="manager" data-elpis-manager-select<?= $projectManagers === [] ? ' disabled' : '' ?>>
+                <?php if ($projectManagers !== []): ?>
+                    <input type="text" class="elpis-manager-combo" data-elpis-manager-combo list="elpis-manager-options" autocomplete="off" spellcheck="false"
+                           value="<?= elpis_h(elpis_is_all_managers_selection($projectManager) ? LOC('elpis.manager.all') : ($projectManager !== '' ? elpis_format_manager_label($projectManager) : '')) ?>"
+                           data-invalid-title="<?= elpis_h(LOC('elpis.manager.invalid')) ?>">
+                    <datalist id="elpis-manager-options">
+                        <option value="<?= elpis_h(LOC('elpis.manager.all')) ?>" data-value="<?= elpis_h(ELPI_MANAGER_ALL) ?>"></option>
+                        <?php foreach ($projectManagers as $managerOption): ?>
+                            <option value="<?= elpis_h(elpis_format_manager_label($managerOption)) ?>" data-value="<?= elpis_h($managerOption) ?>"></option>
+                        <?php endforeach; ?>
+                    </datalist>
+                <?php endif; ?>
+                <select name="manager" data-elpis-manager-select<?= $projectManagers === [] ? ' disabled' : ' hidden' ?>>
                     <?php if ($projectManagers === []): ?>
                         <option value=""><?= elpis_h(LOC('elpis.empty.managers')) ?></option>
                     <?php else: ?>
@@ -730,6 +757,10 @@ $projects = elpis_sort_projects_for_display($projects, []);
                             >
                         </label>
                     </div>
+                    <label class="elpis-check">
+                        <input type="checkbox" id="elpis-projects-problems-only">
+                        <?= elpis_h(LOC('elpis.label.projects_problems_only')) ?>
+                    </label>
                     <p id="elpis-search-empty" class="elpis-muted elpis-search-empty"><?= elpis_h(LOC('elpis.empty.search')) ?></p>
                 </div>
                 <ul class="elpis-project-list" id="elpis-project-list">
@@ -742,6 +773,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
                         $projectMatchesSearch = elpis_matches_search_tokens($searchBlob, $projectSearchTokens);
                         $executionSummary = $cachedLines !== [] ? elpis_project_execution_summary($cachedLines) : ['state' => 'none', 'date' => ''];
                         $executionValue = elpis_project_execution_value($executionSummary);
+                        // E: '' = nog niet gecachet (blijft zichtbaar), anders 1/0 volgens dezelfde probleemdefinitie.
+                        $hasProblem = $cachedLines === [] ? '' : (array_filter($cachedLines, static fn ($l) => is_array($l) && elpis_line_is_problem($l)) !== [] ? '1' : '0');
                         $isFocused = $projectNo !== '' && $projectNo === $openProjectNo;
                         $shareUrl = elpis_url([
                             'company' => $company,
@@ -758,6 +791,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
                             data-project-no="<?= elpis_h($projectNo) ?>"
                             data-project-index="<?= (int) $projectIndex ?>"
                             data-search-text="<?= elpis_h($searchBlob) ?>"
+                            data-has-problem="<?= $hasProblem ?>"
                             <?= $isFocused ? ' data-elpis-focus-project="1"' : '' ?>
                         >
                             <div class="elpis-project-header">
@@ -770,7 +804,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
                                             <?php endif; ?>
                                         </span>
                                         <?php if ($executionValue !== ''): ?>
-                                            <span class="elpis-execution-from<?= $executionSummary['state'] === 'missing' ? ' is-missing' : '' ?>">
+                                            <span class="elpis-execution-from<?= $executionSummary['state'] === 'missing' ? ' is-missing' : ' elpis-opt-orange' ?>">
                                                 <span><?= elpis_h(LOC('elpis.summary.execution_from')) ?></span>
                                                 <span><?= elpis_h($executionValue) ?></span>
                                             </span>
@@ -840,6 +874,13 @@ $projects = elpis_sort_projects_for_display($projects, []);
                 <select id="elpis-material-status-filter"></select>
             </label>
         </div>
+        <div class="elpis-modal-actions">
+            <label class="elpis-check">
+                <input type="checkbox" id="elpis-problems-only" checked>
+                <?= elpis_h(LOC('elpis.label.problems_only')) ?>
+            </label>
+            <button type="button" class="elpis-btn elpis-btn--compact" data-elpis-export><?= elpis_h(LOC('elpis.btn.export_xlsx')) ?></button>
+        </div>
         <div class="elpis-modal-body" id="elpis-modal-body"></div>
     </div>
 </div>
@@ -856,6 +897,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
 </div>
 
 <script src="elpis_history.js"></script>
+<script src="elpis_xlsx.js"></script>
 <script>
 (function () {
     var DELAY_MS = 500;
@@ -1198,6 +1240,32 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
     }
 
+    var managerCombo = filterForm ? filterForm.querySelector('[data-elpis-manager-combo]') : null;
+    if (managerCombo && managerSelect && !managerSelect.disabled) {
+        managerCombo.addEventListener('change', function () {
+            var typed = managerCombo.value.trim().toLowerCase();
+            var match = null;
+            document.querySelectorAll('#elpis-manager-options option').forEach(function (option) {
+                if (option.value.toLowerCase() === typed || (option.getAttribute('data-value') || '').toLowerCase() === typed) {
+                    match = option;
+                }
+            });
+            managerCombo.classList.toggle('is-invalid', !match);
+            managerCombo.title = match ? '' : (managerCombo.getAttribute('data-invalid-title') || '');
+            if (!match) {
+                return;
+            }
+            managerCombo.value = match.value;
+            if (managerSelect.value !== match.getAttribute('data-value')) {
+                managerSelect.value = match.getAttribute('data-value') || '';
+                managerSelect.dispatchEvent(new Event('change'));
+            }
+        });
+        managerCombo.addEventListener('input', function () {
+            managerCombo.classList.remove('is-invalid');
+        });
+    }
+
     if (managerSelect && filterForm && !managerSelect.disabled) {
         managerSelect.addEventListener('change', function () {
             var reloadManagersFlag = filterForm.querySelector('input[name="reload_managers"]');
@@ -1269,7 +1337,10 @@ $projects = elpis_sort_projects_for_display($projects, []);
     var currentLines = [];
     var loadGeneration = 0;
     var numericSortKeys = { to_order: true, ordered: true, open: true, received: true, stock: true };
-        var toneClass = { alert: 'elpis-row--alert', orange: 'elpis-row--orange', warn: 'elpis-row--warn', ok: 'elpis-row--ok' };
+        var toneClass = { alert: 'elpis-row--alert', orange: 'elpis-row--orange', warn: 'elpis-row--warn', ok: 'elpis-row--ok', muted: 'elpis-row--muted' };
+    var problemsOnly = document.getElementById('elpis-problems-only');
+    var projectsProblemsOnly = document.getElementById('elpis-projects-problems-only');
+    var exportButton = document.querySelector('[data-elpis-export]');
         var optClass = { alert: 'elpis-opt-alert', orange: 'elpis-opt-orange', warn: 'elpis-opt-warn', ok: 'elpis-opt-ok', muted: 'elpis-opt-muted' };
         var optBg = { alert: '#fdebec', orange: '#ffedd5', warn: '#fff8db', ok: '#e8f8ee', muted: '#f3f4f6' };
 
@@ -1316,6 +1387,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
             var projectNo = item.getAttribute('data-project-no') || '';
             var isPinned = pinnedProjectNo !== '' && projectNo === pinnedProjectNo;
             var projectVisible = matchesTokens(projectHaystack, tokens) || isPinned;
+            // E: alleen projecten met probleemregels; nog niet gecachete projecten (leeg) blijven zichtbaar.
+            item.classList.toggle('is-problem-hidden', !isPinned && !!(projectsProblemsOnly && projectsProblemsOnly.checked) && item.getAttribute('data-has-problem') === '0');
             item.classList.toggle('is-filtered-out', !projectVisible);
             item.classList.toggle('is-pinned', isPinned);
             item.classList.toggle('is-highlighted', isPinned);
@@ -1412,7 +1485,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
         var status = statusFilter ? statusFilter.value : '';
         var haystack = String(line.search || '').toLowerCase();
         var statusOk = status === '' || line.filter_status === status || (status !== 'LATE' && (line.material_status_filter || line.material_status) === status);
-        return matchesTokens(haystack, tokens) && statusOk;
+        var problemOk = !(problemsOnly && problemsOnly.checked) || !!line.is_problem;
+        return matchesTokens(haystack, tokens) && statusOk && problemOk;
     }
 
     function renderLines() {
@@ -1619,6 +1693,31 @@ $projects = elpis_sort_projects_for_display($projects, []);
             renderLines();
         }
     });
+
+    if (problemsOnly) {
+        problemsOnly.addEventListener('change', renderLines);
+    }
+    if (projectsProblemsOnly) {
+        projectsProblemsOnly.addEventListener('change', applyProjectFilters);
+    }
+    if (exportButton) {
+        exportButton.addEventListener('click', function () {
+            if (!window.ElpisXlsx) {
+                return;
+            }
+            function label(name) {
+                return modal ? (modal.getAttribute('data-label-' + name) || name) : name;
+            }
+            var keys = ['workorder', 'item', 'description', 'planning_date', 'material_status', 'to_order', 'ordered', 'open', 'received', 'picked', 'expected_receipt', 'stock'];
+            var rows = currentLines.filter(lineVisible).map(function (line) {
+                var num = function (v) { var n = parseFloat(v); return isFinite(n) ? n : ''; };
+                return [line.work_order_no || '', line.item_no || '', line.description || '', line.planning_date || '',
+                    line.material_status_label || '', num(line.qty_to_order), num(line.qty_ordered), num(line.qty_open),
+                    num(line.qty_received), line.qty_picked_display || '', line.expected_receipt || '', num(line.free_stock_sort)];
+            });
+            window.ElpisXlsx.download('elpis-' + (currentProject || 'project') + '.xlsx', keys.map(label), rows, currentProject || 'Elpis');
+        });
+    }
 
     if (searchInput) {
         searchInput.addEventListener('input', function () {

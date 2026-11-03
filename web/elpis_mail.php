@@ -75,9 +75,14 @@ function elpis_write_json_file(string $path, array $payload): void
     rename($tmp, $path);
 }
 
+/** Hele uren (Europe/Amsterdam) waarop hourly.php digests verstuurt; keuzelijst in voorkeuren. */
+const ELPIS_MAIL_HOURS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+const ELPIS_MAIL_DEFAULT_HOUR = 8;
+
 function elpis_default_mail_prefs(): array
 {
     return [
+        'hour' => ELPIS_MAIL_DEFAULT_HOUR,
         'frequency' => ELPIS_MAIL_FREQ_DAILY,
         'weekdays' => [1],
         'content' => ELPIS_MAIL_CONTENT_BOTH,
@@ -117,7 +122,11 @@ function elpis_normalize_mail_prefs(array $raw): array
     $weekdays = array_values($weekdays);
     sort($weekdays);
 
+    $hour = $raw['hour'] ?? null;
+    $hour = is_numeric($hour) && in_array((int) $hour, ELPIS_MAIL_HOURS, true) ? (int) $hour : ELPIS_MAIL_DEFAULT_HOUR;
+
     return [
+        'hour' => $hour,
         'frequency' => $frequency,
         'weekdays' => $weekdays,
         'content' => $content,
@@ -138,6 +147,7 @@ function elpis_mail_prefs_for_email(string $email): array
         'frequency' => $stored['elpis_mail_frequency'] ?? null,
         'content' => $stored['elpis_mail_content'] ?? null,
         'weekdays' => $weekdays,
+        'hour' => $stored['elpis_mail_hour'] ?? null,
     ]);
 }
 
@@ -151,6 +161,7 @@ function elpis_save_mail_prefs(string $email, array $prefs): void
     saveUserPref($email, 'elpis_mail_frequency', $prefs['frequency']);
     saveUserPref($email, 'elpis_mail_content', $prefs['content']);
     saveUserPref($email, 'elpis_mail_weekdays', json_encode($prefs['weekdays']));
+    saveUserPref($email, 'elpis_mail_hour', (string) $prefs['hour']);
 }
 
 function elpis_mail_should_send_on(array $prefs, string $dateYmd): bool
@@ -496,22 +507,13 @@ function elpis_mail_line_outstanding_qty(array $line): ?float
 }
 
 /**
- * Regels die niet in de PM-mail horen: materiaalstatus V met openstaand 0, M of G,
- * werkorder afgesloten/gecontroleerd/geannuleerd/gefactureerd/uitgevoerd, of artikel op de uitsluitlijst
- * (excluded_item_nos in data/mail_config.json, standaard leeg).
+ * PM-mail bevat exact de probleemregels (elpis_line_is_problem, dezelfde definitie als de knop
+ * "Alleen probleemregels tonen" en het projectfilter). Daarnaast blijven gesloten werkorders
+ * en de uitsluitlijst (excluded_item_nos in data/mail_config.json) gelden.
  */
 function elpis_mail_line_excluded(array $line, array $excludedItemNos = []): bool
 {
-    $status = strtoupper(trim((string) ($line['material_status'] ?? '')));
-    $outstanding = elpis_mail_line_outstanding_qty($line);
-    if ($status === 'V' && $outstanding !== null && $outstanding <= 0.00001) {
-        return true;
-    }
-    // Ariadne: M = pick aangemaakt, G = volledig gepickt. Niet meer te bestellen.
-    if ($status === 'M' || $status === 'G') {
-        return true;
-    }
-    if (elpis_line_work_order_closed($line)) {
+    if (!elpis_line_is_problem($line) || elpis_line_work_order_closed($line)) {
         return true;
     }
     $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
@@ -595,18 +597,23 @@ function elpis_mail_lateness_for_days(int $days): string
 function elpis_mail_line_reasons(array $line, ?string $today = null): array
 {
     $today = $today ?? elpis_today();
-    $line = elpis_refresh_receipt_state($line);
+    $status = elpis_line_status($line, $today);
     $reasons = [];
-    $date = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
-    $date = $date === '' ? '' : substr($date, 0, 10);
-
-    if ($date === '') {
+    if ($status['date_missing']) {
         $reasons[] = LOC('elpis.mail.reason.missing_date');
     }
-
-    if ($date !== '' && elpis_line_is_late($line, $today)) {
-        $days = elpis_mail_late_day_count($date, $today);
+    if (in_array($status['key'], [ELPI_STATUS_LATE, 'DELIVERY_LATE'], true)) {
+        // Verstreken verwachte datum: telt vanaf die datum; anders hoeveel na de planningsdatum.
+        $need = elpis_line_need_date($line);
+        $from = $status['date'] !== '' && $status['date'] < $today ? $status['date'] : ($status['date'] === '' ? $need : '');
+        $days = $from !== '' ? elpis_mail_late_day_count($from, $today) : elpis_mail_late_day_count($need, $status['date']);
         $reasons[] = elpis_mail_lateness_for_days($days > 0 ? $days : 1);
+    }
+    if ($status['key'] === 'ORDER_TOO_LATE') {
+        $reasons[] = $status['label'];
+    }
+    if ($status['rest'] > 0.00001) {
+        $reasons[] = LOC('elpis.mail.reason.to_order', elpis_format_qty($status['rest']));
     }
 
     return $reasons;
@@ -650,6 +657,43 @@ function elpis_mail_reasons_html(array $reasons, string $cellStyle): string
     return '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">' . $rows . '</table>';
 }
 
+function elpis_asclepius_url(): string
+{
+    global $asclepiusBaseUrl;
+    $base = isset($asclepiusBaseUrl) && is_string($asclepiusBaseUrl) && trim($asclepiusBaseUrl) !== ''
+        ? trim($asclepiusBaseUrl)
+        : (string) (getenv('ASCLEPIUS_BASE_URL') ?: 'https://sleutels.kvt.nl/asclepius/');
+
+    return rtrim($base, '/') . '/';
+}
+
+/** Markdown-tabelcel: pipes/backslashes escapen, regeleinden weg, lengte begrensd (URL-lengte). */
+function elpis_markdown_cell(string $value, int $max = 160): string
+{
+    $value = trim((string) preg_replace('/\s+/u', ' ', $value));
+    if (mb_strlen($value, 'UTF-8') > $max) {
+        $value = rtrim(mb_substr($value, 0, $max - 1, 'UTF-8')) . '…';
+    }
+
+    return str_replace(['\\', '|'], ['\\\\', '\\|'], $value);
+}
+
+/**
+ * Link 'Ticket maken' naar Asclepius 'Nieuw ticket', vooraf ingevuld via GET
+ * (new_category / new_title / new_description). rawurlencode (%20) werkt in Outlook.
+ */
+function elpis_ticket_url(array $headers, array $values, string $itemNo, string $projectNo): string
+{
+    $row = static fn(array $cells): string => '| ' . implode(' | ', array_map('elpis_markdown_cell', $cells)) . ' |';
+    $body = $row($headers) . "\n" . '|' . str_repeat(' --- |', count($headers)) . "\n" . $row($values)
+        . "\n\n" . LOC('elpis.mail.ticket_what') . ' ';
+    $query = 'new_category=' . rawurlencode('Business Central')
+        . '&new_title=' . rawurlencode(LOC('elpis.mail.ticket_title', $itemNo, $projectNo))
+        . '&new_description=' . rawurlencode($body);
+
+    return elpis_asclepius_url() . '?' . $query;
+}
+
 function elpis_digest_message(string $manager, string $intendedEmail, array $lines, bool $testMode): array
 {
     $count = count($lines);
@@ -675,6 +719,7 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
     foreach ($headers as $header) {
         $headHtml .= '<td bgcolor="#00529B" style="' . $head . '">' . elpis_mail_h($header) . '</td>';
     }
+    $headHtml .= '<td bgcolor="#00529B" style="' . $head . '">&nbsp;</td>';
 
     $plainLines = [];
     $htmlRows = '';
@@ -688,7 +733,7 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
         if ($company !== '' && $company !== $currentCompany) {
             $currentCompany = $company;
             $plainLines[] = ($plainLines === [] ? '' : "\n") . '== ' . $company . ' ==';
-            $htmlRows .= '<tr><td colspan="6" bgcolor="#eef6fc" style="' . $font . 'background-color:#eef6fc;color:#00529B;font-size:15px;font-weight:700;padding:12px 10px;border-bottom:1px solid ' . $lineColor . ';">'
+            $htmlRows .= '<tr><td colspan="7" bgcolor="#eef6fc" style="' . $font . 'background-color:#eef6fc;color:#00529B;font-size:15px;font-weight:700;padding:12px 10px;border-bottom:1px solid ' . $lineColor . ';">'
                 . elpis_mail_h($company) . '</td></tr>';
         }
         $line = elpis_refresh_receipt_state($line);
@@ -707,7 +752,7 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
             $whenColor = 'color:#b42318;font-weight:700;';
             $noteColor = 'color:#b42318;font-weight:700;';
         } elseif ($state === 'unconfirmed') {
-            $when = LOC('elpis.receipt.missing');
+            $when = elpis_line_status($line)['key'] === 'NO_DATE' ? LOC('elpis.receipt.missing') : elpis_line_status_label('TO_ORDER');
             $rowBg = '#ffffff';
             $textColor = 'color:#111827;';
             $whenColor = 'color:#8a4b08;font-weight:700;';
@@ -719,7 +764,9 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
             $whenColor = 'color:#111827;';
             $noteColor = 'color:#111827;';
         }
-        $plainLines[] = $projectNo . ' | ' . $workOrder . ' | ' . $item . ' | ' . $description . ' | ' . $when . ' | ' . $note;
+        $ticketUrl = elpis_ticket_url($headers, [$projectNo, $workOrder, $item, $description, $when, $note], $item, $projectNo);
+        $plainLines[] = $projectNo . ' | ' . $workOrder . ' | ' . $item . ' | ' . $description . ' | ' . $when . ' | ' . $note
+            . "\n  " . LOC('elpis.mail.ticket_link') . ': ' . $ticketUrl;
         $values = [$projectNo, $workOrder, $item, $description, $when];
         $colors = [$textColor, $textColor, $textColor, $textColor, $whenColor];
         $htmlRows .= '<tr>';
@@ -729,6 +776,9 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
         }
         $htmlRows .= '<td bgcolor="' . $rowBg . '" style="' . $cell . 'background-color:' . $rowBg . ';' . $noteColor . '">'
             . elpis_mail_reasons_html($reasons, $font . 'font-size:14px;' . $noteColor) . '</td>';
+        $htmlRows .= '<td bgcolor="' . $rowBg . '" style="' . $cell . 'background-color:' . $rowBg . ';white-space:nowrap;">'
+            . '<a href="' . elpis_mail_h($ticketUrl) . '" style="' . $font . 'display:inline-block;background-color:#00529B;color:#ffffff;font-size:13px;font-weight:700;text-decoration:none;padding:6px 10px;border-radius:6px;">'
+            . elpis_mail_h(LOC('elpis.mail.ticket_link')) . '</a></td>';
         $htmlRows .= '</tr>';
     }
 
@@ -767,8 +817,26 @@ function elpis_mail_is_blacklisted(string $email): bool
     return $email !== '' && in_array($normalize($email), $list, true);
 }
 
-function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): array
+function elpis_mail_sent_log_path(): string
 {
+    return elpis_data_dir() . '/mail_sent.json';
+}
+
+/** Dedup: per ontvanger-adres (of manager) de datum van de laatst verstuurde digest. */
+function elpis_mail_sent_log(): array
+{
+    $raw = is_file(elpis_mail_sent_log_path()) ? json_decode((string) file_get_contents(elpis_mail_sent_log_path()), true) : null;
+
+    return is_array($raw) ? $raw : [];
+}
+
+/**
+ * $hour = null: oud gedrag (iedereen nu). Anders alleen managers wier gekozen uur <= $hour
+ * (inhalen als de cache later klaar was) en die vandaag nog niets kregen; max 1x per dag.
+ */
+function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null, ?int $hour = null): array
+{
+    $sentLog = $hour === null ? [] : elpis_mail_sent_log();
     $today = $today ?? elpis_today();
     $config = elpis_mail_config();
     $testMode = !empty($config['test_mode']);
@@ -836,6 +904,12 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
             if ($intended === '') {
                 $stats['no_email']++;
             }
+            $dedupKey = strtolower($intended !== '' ? $intended : $manager);
+            if ($hour !== null && (($sentLog[$dedupKey] ?? '') === $today || $prefs['hour'] > $hour)) {
+                $skipped++;
+                $details[] = ['company' => (string) $company, 'manager' => $manager, 'status' => ($sentLog[$dedupKey] ?? '') === $today ? 'already' : 'hour'];
+                continue;
+            }
             if (!elpis_mail_should_send_on($prefs, $today)) {
                 $stats['schedule']++;
                 $skipped++;
@@ -888,6 +962,10 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null): arr
         [$subject, $plain, $html] = elpis_digest_message($manager, $intended, $lines, $testMode);
         $ok = elpis_mail_send($recipient, $subject, $plain, $html);
         $sent += $ok ? 1 : 0;
+        if ($ok && $hour !== null) {
+            $sentLog[strtolower($intended !== '' ? $intended : $manager)] = $today;
+            elpis_write_json_file(elpis_mail_sent_log_path(), $sentLog);
+        }
         $companies = array_values(array_unique(array_column($lines, 'company')));
         foreach ($companies as $company) {
             $perCompany[$company][$ok ? 'sent' : 'failed']++;
@@ -998,6 +1076,37 @@ function elpis_nightly_warm_live(?callable $warm = null): array
     }
 }
 
+function elpis_digest_bundle_path(): string
+{
+    return elpis_data_dir() . '/digest_bundle.json';
+}
+
+/** hourly.php: verstuur digests aan PM's wier gekozen uur nu is (of eerder vandaag, als de data later klaar was). */
+function elpis_run_hourly(?int $hour = null, ?string $today = null): array
+{
+    $today = $today ?? elpis_today();
+    $hour = $hour ?? (int) (new DateTimeImmutable('now', new DateTimeZone('Europe/Amsterdam')))->format('G');
+    if (!in_array($hour, ELPIS_MAIL_HOURS, true)) {
+        return ['status' => 'outside_hours', 'hour' => $hour];
+    }
+    $raw = is_file(elpis_digest_bundle_path()) ? json_decode((string) file_get_contents(elpis_digest_bundle_path()), true) : null;
+    if (!is_array($raw) || ($raw['date'] ?? '') !== $today) {
+        return ['status' => 'no_data', 'hour' => $hour];
+    }
+    $handle = fopen(elpis_data_dir() . '/hourly.lock', 'c');
+    if ($handle === false || !flock($handle, LOCK_EX | LOCK_NB)) {
+        return ['status' => 'running', 'hour' => $hour];
+    }
+    try {
+        $mail = elpis_dispatch_pm_digests((array) ($raw['by_company'] ?? []), $today, $hour);
+    } finally {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+    }
+
+    return ['status' => 'ok', 'hour' => $hour, 'mail' => $mail];
+}
+
 function elpis_run_nightly(bool $force = false): array
 {
     $lockPath = elpis_data_dir() . '/nightly.lock';
@@ -1034,7 +1143,12 @@ function elpis_run_nightly(bool $force = false): array
         } else {
             $summary = elpis_nightly_warm_live();
         }
-        $mail = elpis_dispatch_pm_digests(is_array($summary['by_company'] ?? null) ? $summary['by_company'] : []);
+        // Versturen gebeurt per PM-uur in hourly.php; nightly bewaart alleen de digestdata.
+        elpis_write_json_file(elpis_digest_bundle_path(), [
+            'date' => $today,
+            'by_company' => is_array($summary['by_company'] ?? null) ? $summary['by_company'] : [],
+        ]);
+        $mail = ['sent' => 0, 'deferred_to_hourly' => true];
         unset($summary['by_company']);
         elpis_nightly_write_state([
             'date' => $today,
