@@ -21,7 +21,7 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 15;
+const ELPI_PROJECT_CACHE_VERSION = 16;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -2020,7 +2020,8 @@ function elpis_item_inventory_select_fields(): string
 {
     // AppItems.InventoryField is de artikelvoorraad. Geen Location_Code:
     // de aftrek van reserveringen geldt voor dezelfde artikelbrede voorraad.
-    return 'No,InventoryField';
+    // Type ('Service') en LVS_Maintenance_Task_Item (taakartikel): fictieve artikelen, Elpis filtert die regels weg.
+    return 'No,InventoryField,Type,LVS_Maintenance_Task_Item';
 }
 
 function elpis_receipt_filters_are_department_independent(string $filter): bool
@@ -2416,8 +2417,9 @@ function elpis_item_inventory_chunk_count(array $itemNos): int
     return (int) ceil(count($unique) / ELPI_PLANNING_LINES_CHUNK_SIZE);
 }
 
-function elpis_fetch_item_inventory(string $company, array $itemNos, int $ttl = ELPI_CACHE_TTL, ?callable $onChunk = null): array
+function elpis_fetch_item_inventory(string $company, array $itemNos, int $ttl = ELPI_CACHE_TTL, ?callable $onChunk = null, ?array &$skipItems = null): array
 {
+    $skipItems = [];
     $unique = [];
     foreach ($itemNos as $itemNo) {
         $itemNo = trim((string) $itemNo);
@@ -2448,6 +2450,9 @@ function elpis_fetch_item_inventory(string $company, array $itemNos, int $ttl = 
             $no = trim((string) ($row['No'] ?? ''));
             if ($no === '') {
                 continue;
+            }
+            if (($row['Type'] ?? '') === 'Service' || ($row['LVS_Maintenance_Task_Item'] ?? false) === true) {
+                $skipItems[strtoupper($no)] = true;
             }
             if (!array_key_exists('InventoryField', $row) || $row['InventoryField'] === '' || $row['InventoryField'] === null) {
                 continue;
@@ -2890,7 +2895,8 @@ function elpis_load_receipt_context(string $company, array $linesByProject, int 
                 $onInventoryChunk($done, $total);
             }
             $emit('inventory', 'progress', ['done' => $done, 'total' => $total]);
-        }
+        },
+        $skipItems
     );
     $emit('inventory', 'done', ['done' => $inventoryChunks, 'total' => $inventoryChunks]);
 
@@ -2915,6 +2921,7 @@ function elpis_load_receipt_context(string $company, array $linesByProject, int 
         'reservations' => $reservations,
         'purchase_lines' => $purchaseLines,
         'inventory' => $inventory,
+        'skip_items' => $skipItems,
         'receipts' => $receipts,
         'stock_ledger' => $stockLedger,
         'work_orders' => $workOrders,
@@ -3577,6 +3584,13 @@ function elpis_finalize_line(
 function elpis_enrich_planning_lines_with_receipts(string $company, array $linesByProject, int $ttl = ELPI_CACHE_TTL, ?callable $onInventoryChunk = null, ?callable $onPhase = null): array
 {
     $context = elpis_load_receipt_context($company, $linesByProject, $ttl, $onInventoryChunk, $onPhase);
+    // Taak- en serviceartikelen (AppItems) helemaal weglaten; zonder artikelinfo blijft de regel staan.
+    $skip = (array) ($context['skip_items'] ?? []);
+    foreach ($linesByProject as $projectNo => $lines) {
+        $linesByProject[$projectNo] = array_values(array_filter((array) $lines, static function ($line) use ($skip): bool {
+            return !is_array($line) || !isset($skip[strtoupper(trim((string) ($line['item_no'] ?? '')))]);
+        }));
+    }
 
     return elpis_apply_receipt_expectations(
         $linesByProject,
