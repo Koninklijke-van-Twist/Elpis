@@ -51,7 +51,7 @@ for ($day = 1; $day <= 7; $day++) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= elpis_prefs_h(LOC('elpis.prefs.title')) ?></title>
-    <link rel="stylesheet" href="brand.css">
+    <link rel="stylesheet" href="brand.css?v=<?= (int) @filemtime(__DIR__ . '/brand.css') ?>">
     <link rel="manifest" href="site.webmanifest">
     <link rel="icon" href="box.svg" type="image/svg+xml">
     <?php renderLanguageSwitcherStyles(); ?>

@@ -73,7 +73,6 @@ $mailLines = elpis_apply_receipt_expectations(['PRJ1' => [
         'completely_picked' => false,
         'kvt_qty_picked' => 0,
         'expected_receipt_date' => '2026-10-01',
-        'material_status' => 'I',
         'receipt_state' => '',
         'received_date' => '',
     ],
@@ -91,7 +90,6 @@ $mailLines = elpis_apply_receipt_expectations(['PRJ1' => [
         'completely_picked' => false,
         'kvt_qty_picked' => 0,
         'expected_receipt_date' => '2026-10-01',
-        'material_status' => 'I',
         'receipt_state' => '',
         'received_date' => '',
     ],
@@ -109,7 +107,6 @@ $mailLines = elpis_apply_receipt_expectations(['PRJ1' => [
         'completely_picked' => false,
         'kvt_qty_picked' => 0,
         'expected_receipt_date' => '2026-10-01',
-        'material_status' => 'I',
         'receipt_state' => '',
         'received_date' => '',
     ],
@@ -176,7 +173,6 @@ if (elpis_mail_lateness_for_days(60) !== '2 maanden te laat' || elpis_mail_laten
 
 $oneDay = elpis_mail_join_reasons(elpis_mail_line_reasons([
     'expected_receipt_date' => '2026-10-19',
-    'material_status' => 'I',
     'quantity' => 1,
     'purchase_order_no' => 'IO1',
     'purchase_outstanding_qty' => 1,
@@ -184,7 +180,6 @@ $oneDay = elpis_mail_join_reasons(elpis_mail_line_reasons([
 ]));
 $twoWeeks = elpis_mail_join_reasons(elpis_mail_line_reasons([
     'expected_receipt_date' => '2026-10-01',
-    'material_status' => 'I',
     'quantity' => 1,
     'purchase_order_no' => 'IO1',
     'purchase_outstanding_qty' => 1,
@@ -192,7 +187,6 @@ $twoWeeks = elpis_mail_join_reasons(elpis_mail_line_reasons([
 ]));
 $eightWeeks = elpis_mail_join_reasons(elpis_mail_line_reasons([
     'expected_receipt_date' => '2026-08-22',
-    'material_status' => 'I',
     'quantity' => 1,
     'purchase_order_no' => 'IO1',
     'purchase_outstanding_qty' => 1,
@@ -200,7 +194,6 @@ $eightWeeks = elpis_mail_join_reasons(elpis_mail_line_reasons([
 ]));
 $twoMonths = elpis_mail_join_reasons(elpis_mail_line_reasons([
     'expected_receipt_date' => '2026-08-21',
-    'material_status' => 'I',
     'quantity' => 1,
     'purchase_order_no' => 'IO1',
     'purchase_outstanding_qty' => 1,

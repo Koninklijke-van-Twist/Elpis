@@ -29,7 +29,6 @@ function line(array $extra = []): array
         'purchase_order_no' => '',
         'purchase_order_line_no' => 0,
         'expected_receipt_date' => '',
-        'material_status' => 'I',
     ], $extra);
 }
 
@@ -60,13 +59,13 @@ if (($out['P'][0]['receipt_state'] ?? '') !== 'unconfirmed') {
 }
 
 // Punt K: oude BC-uitsluiting (V, openstaand 0) vervalt; zonder dekking = probleemregel → wel in de mail.
-if (elpis_mail_line_excluded(line(['material_status' => 'V', 'inkoop_outstanding_qty' => 0.0]))) {
+if (elpis_mail_line_excluded(line(['inkoop_outstanding_qty' => 0.0]))) {
     fail('regel zonder dekking hoort in de mail (punt K)');
 }
-if (elpis_mail_line_excluded(line(['material_status' => 'V', 'inkoop_outstanding_qty' => 2.0]))) {
+if (elpis_mail_line_excluded(line(['inkoop_outstanding_qty' => 2.0]))) {
     fail('V met openstaand 2 blijft');
 }
-// Punt K: uitsluiting op BC-materiaalstatus (M/G/V openstaand 0) vervalt; alleen probleemregel/werkorder/blacklist.
+// Punt K: uitsluiting alleen op probleemregel/werkorder/blacklist.
 foreach (['Afgesloten', 'Gecontroleerd', 'Geannuleerd', 'Gefactureerd', ' afgesloten ', 'GECONTROLEERD',
     'Completed', 'Checked', 'Closed', 'Cancelled', 'Invoiced', ' closed ',
     'Uitgevoerd', ' uitgevoerd ', 'Executed', 'PERFORMED'] as $status) {
@@ -82,26 +81,23 @@ foreach (['Open', 'Gepland', 'Onderhanden', 'Ondertekend', 'Planned', ''] as $st
 if (!elpis_mail_line_excluded(line(['item_no' => 'uur']), ['UUR']) || elpis_mail_line_excluded(line(['item_no' => 'UUR']))) {
     fail('uitsluitlijst werkt alleen als hij gevuld is');
 }
-$n = elpis_refresh_receipt_state(line(['material_status' => 'N', 'expected_receipt_date' => '2026-01-01']));
+$n = elpis_refresh_receipt_state(line(['expected_receipt_date' => '2026-01-01']));
 if (elpis_line_is_late($n) || ($n['receipt_state'] ?? '') === 'late') {
     fail('N is nooit te laat');
 }
-if (elpis_material_status_label('M') !== 'Pick aangemaakt') {
-    fail('M staat in de statuslijst');
-}
 
 // Ronde 3: openstaand zonder gekoppelde inkoopregel = LVS_Outstanding_Qty_Base (PRJ5260160 / WO2600161).
-$v = line(['material_status' => 'V', 'work_order_no' => 'WO2600161', 'inkoop_outstanding_qty' => 0.0]);
+$v = line(['work_order_no' => 'WO2600161', 'inkoop_outstanding_qty' => 0.0]);
 if (elpis_mail_line_outstanding_qty($v) !== 0.0) {
     fail('V zonder inkoopregel met LVS openstaand 0');
 }
 if (elpis_mail_line_outstanding_qty(line(['inkoop_outstanding_qty' => 0.0, 'purchase_outstanding_qty' => 3.0])) !== 3.0) {
     fail('gekoppelde inkoopregel gaat voor LVS');
 }
-if (elpis_mail_line_excluded(line(['material_status' => 'V', 'inkoop_outstanding_qty' => 0.0, 'purchase_outstanding_qty' => 3.0]))) {
+if (elpis_mail_line_excluded(line(['inkoop_outstanding_qty' => 0.0, 'purchase_outstanding_qty' => 3.0]))) {
     fail('V met openstaande inkoopregel blijft');
 }
-if (elpis_mail_line_outstanding_qty(line()) !== null || elpis_mail_line_excluded(line(['material_status' => 'V']))) {
+if (elpis_mail_line_outstanding_qty(line()) !== null || elpis_mail_line_excluded(line([]))) {
     fail('onbekend openstaand sluit niet uit');
 }
 

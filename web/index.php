@@ -591,7 +591,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
         .elpis-project-item.is-problem-hidden { display: none; }
         .elpis-combo { position: relative; display: block; }
         .elpis-combo .elpis-manager-combo { width: 100%; padding-right: 36px; box-sizing: border-box; }
-        .elpis-combo-toggle { position: absolute; top: 0; right: 0; bottom: 0; width: 34px; border: 0; background: transparent; color: var(--kvt-perkins-blue); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .elpis-combo-toggle { z-index: 2; touch-action: manipulation; position: absolute; top: 0; right: 0; bottom: 0; width: 34px; border: 0; background: transparent; color: var(--kvt-perkins-blue); cursor: pointer; display: flex; align-items: center; justify-content: center; }
         .elpis-combo-list { position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 2px); max-height: 280px; overflow-y: auto; margin: 0; padding: 4px 0; list-style: none; background: #fff; border: 1px solid var(--kvt-line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.15); font-weight: 400; }
         .elpis-combo-list[hidden] { display: none; }
         .elpis-combo-list li { padding: 7px 12px; cursor: pointer; color: #111827; }
@@ -868,7 +868,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
      data-label-item="<?= elpis_h(LOC('elpis.col.item')) ?>"
      data-label-description="<?= elpis_h(LOC('elpis.col.description')) ?>"
      data-label-planning_date="<?= elpis_h(LOC('elpis.col.planning_date')) ?>"
-     data-label-material_status="<?= elpis_h(LOC('elpis.col.material_status')) ?>"
+     data-label-line_status="<?= elpis_h(LOC('elpis.col.line_status')) ?>"
      data-label-to_order="<?= elpis_h(LOC('elpis.col.to_order')) ?>"
      data-label-ordered="<?= elpis_h(LOC('elpis.col.ordered')) ?>"
      data-label-open="<?= elpis_h(LOC('elpis.col.outstanding')) ?>"
@@ -878,7 +878,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
      data-label-expected_receipt="<?= elpis_h(LOC('elpis.col.expected_receipt')) ?>"
      data-label-stock="<?= elpis_h(LOC('elpis.col.stock')) ?>"
      data-empty="<?= elpis_h(LOC('elpis.empty.lines')) ?>"
-     data-status-all="<?= elpis_h(LOC('elpis.material_status.all')) ?>"
+     data-status-all="<?= elpis_h(LOC('elpis.status.all')) ?>"
      data-load-failed="<?= elpis_h(LOC('elpis.error.load_failed')) ?>">
     <div class="elpis-modal-panel" role="dialog" aria-modal="true" aria-labelledby="elpis-modal-title">
         <div class="elpis-modal-head">
@@ -894,8 +894,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
                 <input type="search" id="elpis-line-search" name="line_q" value="<?= elpis_h(trim((string) ($_GET['line_q'] ?? ''))) ?>" autocomplete="off" spellcheck="false" placeholder="<?= elpis_h(LOC('elpis.placeholder.line_search')) ?>">
             </label>
             <div class="elpis-status-filter">
-                <button type="button" class="elpis-btn elpis-btn--compact" id="elpis-status-filter-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="elpis-status-popover"><?= elpis_h(LOC('elpis.label.material_status_filter')) ?> <span id="elpis-status-filter-count"></span></button>
-                <div class="elpis-status-popover" id="elpis-status-popover" role="dialog" aria-label="<?= elpis_h(LOC('elpis.label.material_status_filter')) ?>" hidden>
+                <button type="button" class="elpis-btn elpis-btn--compact" id="elpis-status-filter-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="elpis-status-popover"><?= elpis_h(LOC('elpis.label.status_filter')) ?> <span id="elpis-status-filter-count"></span></button>
+                <div class="elpis-status-popover" id="elpis-status-popover" role="dialog" aria-label="<?= elpis_h(LOC('elpis.label.status_filter')) ?>" hidden>
                     <div id="elpis-status-options" class="elpis-status-options"></div>
                     <div class="elpis-status-popover-actions">
                         <button type="button" class="elpis-btn elpis-btn--compact" id="elpis-status-problems-only"><?= elpis_h(LOC('elpis.label.problems_only')) ?></button>
@@ -1332,13 +1332,28 @@ $projects = elpis_sort_projects_for_display($projects, []);
             managerCombo.setAttribute('aria-expanded', comboList.hidden ? 'false' : 'true');
             comboActive = -1;
         }
+        function chosenComboLabel() {
+            var label = '';
+            document.querySelectorAll('#elpis-manager-options option').forEach(function (o) {
+                if ((o.getAttribute('data-value') || '') === managerSelect.value) {
+                    label = o.value;
+                }
+            });
+            return label;
+        }
+        function restoreCombo() {
+            managerCombo.value = chosenComboLabel();
+            managerCombo.classList.remove('is-invalid');
+            managerCombo.title = '';
+            closeComboList(false);
+        }
         function closeComboList(restore) {
             if (comboList) {
                 comboList.hidden = true;
             }
             managerCombo.setAttribute('aria-expanded', 'false');
-            if (restore && comboRestore !== null && managerCombo.value.trim() === '') {
-                managerCombo.value = comboRestore;
+            if (restore && managerCombo.value.trim() === '') {
+                managerCombo.value = comboRestore !== null ? comboRestore : chosenComboLabel();
                 managerCombo.classList.remove('is-invalid');
             }
             comboRestore = null;
@@ -1349,20 +1364,31 @@ $projects = elpis_sort_projects_for_display($projects, []);
             closeComboList(false);
             managerCombo.dispatchEvent(new Event('change'));
         }
+        // Pijltje: altijd leegmaken, ook bij de eerste klik na reload. Op pointerdown (vóór focus/click),
+        // zodat focus of een herstelde formulierwaarde de leegmaak niet kan overschrijven.
+        function toggleCombo(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (comboList && !comboList.hidden) {
+                closeComboList(true);
+                return;
+            }
+            comboRestore = chosenComboLabel() || managerCombo.value;
+            managerCombo.value = '';
+            managerCombo.classList.remove('is-invalid');
+            managerCombo.focus();
+            managerCombo.value = '';
+            openComboList('');
+        }
         if (comboToggle) {
-            comboToggle.addEventListener('mousedown', function (event) {
+            comboToggle.addEventListener(window.PointerEvent ? 'pointerdown' : 'mousedown', toggleCombo);
+            comboToggle.addEventListener('click', function (event) {
                 event.preventDefault();
             });
-            comboToggle.addEventListener('click', function () {
-                if (comboList && !comboList.hidden) {
-                    closeComboList(true);
-                    return;
+            comboToggle.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    toggleCombo(event);
                 }
-                comboRestore = managerCombo.value;
-                managerCombo.value = '';
-                managerCombo.classList.remove('is-invalid');
-                managerCombo.focus();
-                openComboList('');
             });
         }
         managerCombo.addEventListener('keydown', function (event) {
@@ -1376,9 +1402,10 @@ $projects = elpis_sort_projects_for_display($projects, []);
             } else if (event.key === 'Enter' && open && comboActive >= 0) {
                 event.preventDefault();
                 pickCombo(comboItems()[comboActive].textContent);
-            } else if (event.key === 'Escape' && open) {
+            } else if (event.key === 'Escape') {
+                // Escape herstelt altijd de gekozen waarde, ook als de lijst al dicht is.
                 event.preventDefault();
-                closeComboList(true);
+                restoreCombo();
             }
         });
         managerCombo.addEventListener('blur', function () {
@@ -1671,7 +1698,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
             ['item', label('item'), sample.item],
             ['description', label('description'), sample.description],
             ['planning_date', label('planning_date'), sample.planning_date],
-            ['material_status', label('material_status'), sample.material_status],
+            ['line_status', label('line_status'), sample.line_status],
             ['to_order', label('to_order'), sample.to_order],
             ['ordered', label('ordered'), sample.ordered],
             ['open', label('open'), sample.open],
@@ -1694,7 +1721,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
                 + ' data-sort-item="' + esc(String(line.item_no || '').toLowerCase()) + '"'
                 + ' data-sort-description="' + esc(String(line.description || '').toLowerCase()) + '"'
                 + ' data-sort-planning_date="' + esc(line.planning_date_sort || '') + '"'
-                + ' data-sort-material_status="' + esc(String(line.material_status_label || '').toLowerCase()) + '"'
+                + ' data-sort-line_status="' + esc(String(line.status_label || '').toLowerCase()) + '"'
                 + ' data-sort-to_order="' + esc(line.qty_to_order) + '"'
                 + ' data-sort-ordered="' + esc(line.qty_ordered) + '"'
                 + ' data-sort-open="' + esc(line.qty_open) + '"'
@@ -1709,7 +1736,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
             html += cell(line.item_no, tips.item);
             html += cell(line.description, tips.description, ' class="elpis-col-description"');
             html += cell(line.planning_date, tips.planning_date, ' class="date"');
-            html += cell(line.material_status_label, tips.material_status);
+            html += cell(line.status_label, line.status_reason || tips.line_status);
             html += cell(line.qty_to_order_display, tips.to_order, ' class="num"');
             html += cell(line.qty_ordered_display, tips.ordered, ' class="num"');
             html += cell(line.qty_open_display, tips.open, ' class="num"');
@@ -1887,11 +1914,11 @@ $projects = elpis_sort_projects_for_display($projects, []);
             function label(name) {
                 return modal ? (modal.getAttribute('data-label-' + name) || name) : name;
             }
-            var keys = ['workorder', 'item', 'description', 'planning_date', 'material_status', 'to_order', 'ordered', 'open', 'received', 'needed', 'picked', 'expected_receipt', 'stock'];
+            var keys = ['workorder', 'item', 'description', 'planning_date', 'line_status', 'to_order', 'ordered', 'open', 'received', 'needed', 'picked', 'expected_receipt', 'stock'];
             var rows = currentLines.filter(lineVisible).map(function (line) {
                 var num = function (v) { var n = parseFloat(v); return isFinite(n) ? n : ''; };
                 return [line.work_order_no || '', line.item_no || '', line.description || '', line.planning_date || '',
-                    line.material_status_label || '', num(line.qty_to_order), num(line.qty_ordered), num(line.qty_open),
+                    line.status_label || '', num(line.qty_to_order), num(line.qty_ordered), num(line.qty_open),
                     num(line.qty_received), num(line.qty_needed), num(line.qty_picked), line.expected_receipt || '', num(line.free_stock_sort)];
             });
             window.ElpisXlsx.download('elpis-' + (currentProject || 'project') + '.xlsx', keys.map(label), rows, currentProject || 'Elpis');
