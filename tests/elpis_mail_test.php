@@ -19,8 +19,8 @@ function fail(string $message): void
 }
 
 $defaults = elpis_default_mail_prefs();
-if ($defaults['frequency'] !== 'daily' || $defaults['content'] !== 'both') {
-    fail('standaard is dagelijks en beide');
+if ($defaults['frequency'] !== 'daily' || $defaults['content'] !== 'problems') {
+    fail('standaard is dagelijks en probleemregels');
 }
 
 $monday = '2026-10-19';
@@ -134,7 +134,7 @@ $mailLines = elpis_apply_receipt_expectations(['PRJ1' => [
 $mailed = [];
 foreach ($mailLines['PRJ1'] as $mailLine) {
     $mailLine['project_no'] = 'PRJ1';
-    if (elpis_mail_line_matches_content($mailLine, 'both')) {
+    if (elpis_mail_line_matches_content($mailLine, 'late')) {
         $mailed[] = $mailLine;
     }
 }
@@ -272,9 +272,9 @@ if (($result['sent'] ?? 0) !== 1 || count($sent) !== 1) {
     fail('een pm met treffers krijgt één mail: ' . json_encode($result));
 }
 $pc = $result['per_company']['Koninklijke van Twist'] ?? [];
-// Punt K: alleen probleemregels tellen ($ok = groen valt al af).
-if (($pc['managers'] ?? 0) !== 1 || ($pc['recipients'] ?? 0) !== 1 || ($pc['lines'] ?? 0) !== 2
-    || ($pc['lines_matched'] ?? 0) < 1 || ($pc['sent'] ?? 0) !== 1 || ($pc['no_email'] ?? -1) !== 0
+// Punt K: groen telt als regel maar valt bij de inhoudskeuze (probleemregels) af.
+if (($pc['managers'] ?? 0) !== 1 || ($pc['recipients'] ?? 0) !== 1 || ($pc['lines'] ?? 0) !== 3
+    || ($pc['lines_matched'] ?? 0) !== 2 || ($pc['sent'] ?? 0) !== 1 || ($pc['no_email'] ?? -1) !== 0
     || !is_array($pc['receipt_states'] ?? null)) {
     fail('per-bedrijf telling klopt niet: ' . json_encode($pc));
 }

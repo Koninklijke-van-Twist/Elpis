@@ -49,7 +49,7 @@ if (($l['expected_receipt_date'] ?? '') !== '2026-04-28' || ($l['receipt_state']
 
 $stockSupply = array_merge($purchaseSupply, ['Source_Type' => ELPI_ITEM_LEDGER_SOURCE_TYPE, 'Source_ID' => '', 'Source_Ref_No' => 0]);
 $out = elpis_apply_receipt_expectations(['P' => [line()]], [$demand, $stockSupply], [], []);
-if (($out['P'][0]['receipt_state'] ?? '') !== 'stock' || elpis_mail_line_matches_content($out['P'][0], 'both')) {
+if (($out['P'][0]['receipt_state'] ?? '') !== 'stock' || elpis_mail_line_matches_content($out['P'][0], 'late')) {
     fail('reservering uit voorraad is geen Datum ontbreekt: ' . json_encode($out['P'][0]));
 }
 
