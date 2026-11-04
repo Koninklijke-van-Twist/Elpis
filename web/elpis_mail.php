@@ -529,12 +529,11 @@ function elpis_digest_rows_for_manager(array $projects, array $linesByProject, s
         if (!is_array($project)) {
             continue;
         }
-        if (strcasecmp((string) ($project['project_manager'] ?? ''), $manager) !== 0) {
-            continue;
-        }
+        // PM: alle regels van het project; besteller: alleen regels met die besteller. Eén lus = geen dubbele regels.
+        $isManager = strcasecmp((string) ($project['project_manager'] ?? ''), $manager) === 0;
         $projectNo = (string) ($project['no'] ?? '');
         foreach ($linesByProject[$projectNo] ?? [] as $line) {
-            if (!is_array($line)) {
+            if (!is_array($line) || (!$isManager && !elpis_line_has_purchaser($line, $manager))) {
                 continue;
             }
             if (elpis_mail_line_excluded($line, $excludedItemNos)) {
@@ -862,8 +861,22 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null, ?int
                 $managers[$manager] = $manager;
             }
         }
+        // Bestellers (BC-gebruiker of inkopercode) krijgen dezelfde mail; adres AppUserSetup/inkoperkaart, anders Users.
+        $purchaserEmails = [];
+        foreach ((array) ($bundle['lines'] ?? []) as $lines) {
+            foreach ((array) $lines as $line) {
+                foreach (is_array($line) ? (array) ($line['purchasers'] ?? []) : [] as $person) {
+                    $key = is_array($person) ? elpis_purchaser_key($person) : '';
+                    if ($key !== '') {
+                        $managers[$key] = $key;
+                        $purchaserEmails[$key] = ($purchaserEmails[$key] ?? '') !== '' ? $purchaserEmails[$key] : (string) ($person['email'] ?? '');
+                    }
+                }
+            }
+        }
         $managersByCompany[$company] = $managers;
-        $emailsByCompany[$company] = elpis_fetch_user_emails((string) $company, array_values($managers), ELPI_NIGHTLY_MAX_AGE);
+        $emailsByCompany[$company] = array_filter($purchaserEmails)
+            + elpis_fetch_user_emails((string) $company, array_values($managers), $hour === null ? ELPI_NIGHTLY_MAX_AGE : ELPI_HOURLY_MAX_AGE);
         foreach ($managers as $manager) {
             $email = (string) ($emailsByCompany[$company][$manager] ?? '');
             $current = $chosenEmail[$manager] ?? '';

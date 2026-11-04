@@ -267,6 +267,33 @@ elpis_log_timing(
 
 $projects = elpis_sort_projects_for_display($projects, []);
 
+// Besteller-filter: opties uit de projectcache van de getoonde projecten; filter laat projecten met regels van die besteller over.
+$requestedPurchaser = $companyReloaded ? '' : trim((string) ($_GET['purchaser'] ?? ''));
+$purchaserOptions = [];
+$purchaserProjects = [];
+foreach ($projects as $project) {
+    $projectNo = (string) ($project['no'] ?? '');
+    $cached = $projectNo !== '' ? elpis_read_project_cache($company, $projectNo) : null;
+    foreach ((array) ($cached['lines'] ?? []) as $line) {
+        foreach (is_array($line) ? (array) ($line['purchasers'] ?? []) : [] as $person) {
+            if (is_array($person) && ($key = elpis_purchaser_key($person)) !== '') {
+                $purchaserOptions[$key] = elpis_purchaser_label($person);
+                $purchaserProjects[$key][$projectNo] = true;
+            }
+        }
+    }
+}
+asort($purchaserOptions, SORT_NATURAL | SORT_FLAG_CASE);
+$purchaser = '';
+foreach (array_keys($purchaserOptions) as $key) {
+    if (strcasecmp((string) $key, $requestedPurchaser) === 0) {
+        $purchaser = (string) $key;
+    }
+}
+if ($purchaser !== '') {
+    $projects = array_values(array_filter($projects, static fn (array $p): bool => isset($purchaserProjects[$purchaser][(string) ($p['no'] ?? '')])));
+}
+
 ?><!DOCTYPE html>
 <html lang="<?= elpis_h(getHtmlLang()) ?>">
 <head>
@@ -752,6 +779,30 @@ $projects = elpis_sort_projects_for_display($projects, []);
                     <?php endif; ?>
                 </select>
             </label>
+            <?php if ($purchaserOptions !== []): ?>
+            <label>
+                <?= elpis_h(LOC('elpis.label.purchaser')) ?>
+                <span class="elpis-combo">
+                <input type="text" class="elpis-manager-combo" data-elpis-purchaser-combo role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="elpis-purchaser-list" autocomplete="off" spellcheck="false"
+                       value="<?= elpis_h($purchaser !== '' ? $purchaserOptions[$purchaser] : LOC('elpis.purchaser.all')) ?>"
+                       data-invalid-title="<?= elpis_h(LOC('elpis.purchaser.invalid')) ?>">
+                <button type="button" class="elpis-combo-toggle" data-elpis-combo-toggle tabindex="-1" aria-label="<?= elpis_h(LOC('elpis.label.purchaser')) ?>"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+                <ul class="elpis-combo-list" id="elpis-purchaser-list" role="listbox" hidden></ul>
+                </span>
+                <datalist id="elpis-purchaser-options">
+                    <option value="<?= elpis_h(LOC('elpis.purchaser.all')) ?>" data-value=""></option>
+                    <?php foreach ($purchaserOptions as $key => $label): ?>
+                        <option value="<?= elpis_h($label) ?>" data-value="<?= elpis_h((string) $key) ?>"></option>
+                    <?php endforeach; ?>
+                </datalist>
+                <select name="purchaser" data-elpis-purchaser-select hidden>
+                    <option value=""><?= elpis_h(LOC('elpis.purchaser.all')) ?></option>
+                    <?php foreach ($purchaserOptions as $key => $label): ?>
+                        <option value="<?= elpis_h((string) $key) ?>"<?= strcasecmp((string) $key, $purchaser) === 0 ? ' selected' : '' ?>><?= elpis_h($label) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <?php endif; ?>
             <?php else: ?>
                 <p class="elpis-muted"><?= elpis_h(LOC('elpis.company.hint')) ?></p>
                 <button class="elpis-btn" type="submit"><?= elpis_h(LOC('elpis.btn.show_projects')) ?></button>
@@ -814,6 +865,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
                         $shareUrl = elpis_url([
                             'company' => $company,
                             'manager' => $projectManager,
+                            'purchaser' => $purchaser !== '' ? $purchaser : null,
                             'project' => $projectNo,
                             'q' => null,
                             'line_q' => null,
@@ -889,6 +941,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
      data-label-needed="<?= elpis_h(LOC('elpis.col.needed')) ?>"
      data-label-expected_receipt="<?= elpis_h(LOC('elpis.col.expected_receipt')) ?>"
      data-label-stock="<?= elpis_h(LOC('elpis.col.stock')) ?>"
+     data-label-purchaser="<?= elpis_h(LOC('elpis.col.purchaser')) ?>"
      data-empty="<?= elpis_h(LOC('elpis.empty.lines')) ?>"
      data-status-all="<?= elpis_h(LOC('elpis.status.all')) ?>"
      data-load-failed="<?= elpis_h(LOC('elpis.error.load_failed')) ?>">
@@ -1288,12 +1341,15 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
     }
 
-    var managerCombo = filterForm ? filterForm.querySelector('[data-elpis-manager-combo]') : null;
-    if (managerCombo && managerSelect && !managerSelect.disabled) {
+    // Gedeelde combobox (PM en besteller): autocomplete, rood bij onbekende waarde, pijltje = leeg, Escape herstelt.
+    function initCombo(managerCombo, managerSelect, optionsSelector, comboList, comboToggle) {
+        if (!managerCombo || !managerSelect || managerSelect.disabled) {
+            return;
+        }
         managerCombo.addEventListener('change', function () {
             var typed = managerCombo.value.trim().toLowerCase();
             var match = null;
-            document.querySelectorAll('#elpis-manager-options option').forEach(function (option) {
+            document.querySelectorAll(optionsSelector).forEach(function (option) {
                 if (option.value.toLowerCase() === typed || (option.getAttribute('data-value') || '').toLowerCase() === typed) {
                     match = option;
                 }
@@ -1316,9 +1372,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
         });
         // Eigen dropdown (datalist filtert in Chrome op de huidige waarde): pijltje = veld leeg + alle opties.
         // Leegmaken wijzigt het filter niet; zonder keuze (Escape/klik ernaast) komt de oude waarde terug.
-        var comboList = document.getElementById('elpis-manager-list');
-        var comboToggle = filterForm.querySelector('[data-elpis-combo-toggle]');
-        var comboOptions = Array.prototype.map.call(document.querySelectorAll('#elpis-manager-options option'), function (o) { return o.value; });
+        var comboOptions = Array.prototype.map.call(document.querySelectorAll(optionsSelector), function (o) { return o.value; });
         var comboRestore = null;
         var comboActive = -1;
         // Laatst gekozen waarde (bij laden, klik of Enter); Escape zet altijd deze terug.
@@ -1359,7 +1413,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
         }
         function chosenComboLabel() {
             var label = '';
-            document.querySelectorAll('#elpis-manager-options option').forEach(function (o) {
+            document.querySelectorAll(optionsSelector).forEach(function (o) {
                 if ((o.getAttribute('data-value') || '') === managerSelect.value) {
                     label = o.value;
                 }
@@ -1447,6 +1501,14 @@ $projects = elpis_sort_projects_for_display($projects, []);
         managerCombo.addEventListener('blur', function () {
             closeComboList(true);
         });
+    }
+    initCombo(filterForm ? filterForm.querySelector('[data-elpis-manager-combo]') : null, managerSelect, '#elpis-manager-options option',
+        document.getElementById('elpis-manager-list'), filterForm ? filterForm.querySelector('[data-elpis-manager-combo] ~ [data-elpis-combo-toggle]') : null);
+    var purchaserSelect = filterForm ? filterForm.querySelector('[data-elpis-purchaser-select]') : null;
+    initCombo(filterForm ? filterForm.querySelector('[data-elpis-purchaser-combo]') : null, purchaserSelect, '#elpis-purchaser-options option',
+        document.getElementById('elpis-purchaser-list'), filterForm ? filterForm.querySelector('[data-elpis-purchaser-combo] ~ [data-elpis-combo-toggle]') : null);
+    if (purchaserSelect) {
+        purchaserSelect.addEventListener('change', submitFilterForm);
     }
 
     if (managerSelect && filterForm && !managerSelect.disabled) {
@@ -1769,7 +1831,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
             ['received', label('received'), sample.received],
             ['picked', label('picked'), ''],
             ['expected_receipt', label('expected_receipt'), sample.expected_receipt],
-            ['stock', label('stock'), sample.stock]
+            ['stock', label('stock'), sample.stock],
+            ['purchaser', label('purchaser'), '']
         ];
         var html = '<div class="elpis-table-wrap"><table class="elpis-table"><thead><tr>';
         headers.forEach(function (header) {
@@ -1792,7 +1855,8 @@ $projects = elpis_sort_projects_for_display($projects, []);
                 + ' data-sort-received="' + esc(line.qty_received) + '"'
                 + ' data-sort-picked="' + esc(line.qty_picked) + '"'
                 + ' data-sort-expected_receipt="' + esc(line.expected_receipt_sort || '') + '"'
-                + ' data-sort-stock="' + esc(line.free_stock_sort || '') + '">';
+                + ' data-sort-stock="' + esc(line.free_stock_sort || '') + '"'
+                + ' data-sort-purchaser="' + esc(String(line.purchaser || '').toLowerCase()) + '">';
             function cell(text, tip, extra) {
                 return '<td' + (extra || '') + ' title="' + esc(tip || '') + '">' + esc(text) + '</td>';
             }
@@ -1808,6 +1872,7 @@ $projects = elpis_sort_projects_for_display($projects, []);
             html += cell(line.qty_picked_display, line.qty_picked_tooltip, ' class="num"');
             html += cell(line.expected_receipt, tips.expected_receipt, ' class="date"');
             html += cell(line.free_stock_display, tips.stock, ' class="num"');
+            html += cell(line.purchaser || '', '');
             html += '</tr>';
         });
         html += '</tbody></table></div>';
@@ -1990,12 +2055,12 @@ $projects = elpis_sort_projects_for_display($projects, []);
             function label(name) {
                 return modal ? (modal.getAttribute('data-label-' + name) || name) : name;
             }
-            var keys = ['workorder', 'item', 'description', 'planning_date', 'line_status', 'to_order', 'ordered', 'open', 'received', 'needed', 'picked', 'expected_receipt', 'stock'];
+            var keys = ['workorder', 'item', 'description', 'planning_date', 'line_status', 'to_order', 'ordered', 'open', 'received', 'needed', 'picked', 'expected_receipt', 'stock', 'purchaser'];
             var rows = currentLines.filter(lineVisible).map(function (line) {
                 var num = function (v) { var n = parseFloat(v); return isFinite(n) ? n : ''; };
                 return [line.work_order_no || '', line.item_no || '', line.description || '', line.planning_date || '',
                     line.status_label || '', num(line.qty_to_order), num(line.qty_ordered), num(line.qty_open),
-                    num(line.qty_received), num(line.qty_needed), num(line.qty_picked), line.expected_receipt || '', num(line.free_stock_sort)];
+                    num(line.qty_received), num(line.qty_needed), num(line.qty_picked), line.expected_receipt || '', num(line.free_stock_sort), line.purchaser || ''];
             });
             window.ElpisXlsx.download('elpis-' + (currentProject || 'project') + '.xlsx', keys.map(label), rows, currentProject || 'Elpis');
         });

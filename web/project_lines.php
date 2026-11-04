@@ -78,6 +78,7 @@ try {
             'picked' => LOC('elpis.col.picked'),
             'expected_receipt' => LOC('elpis.col.expected_receipt'),
             'stock' => LOC('elpis.col.stock'),
+            'purchaser' => LOC('elpis.col.purchaser'),
             'empty' => LOC('elpis.empty.lines'),
             'line_search' => LOC('elpis.label.line_search'),
             'line_search_placeholder' => LOC('elpis.placeholder.line_search'),
