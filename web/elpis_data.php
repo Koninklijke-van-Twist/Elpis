@@ -21,7 +21,9 @@ const ELPI_CACHE_TTL = 86400;
 /** Mímir max_age for nightly.php warm (4h — cache sharing, nightly still refreshes). */
 const ELPI_NIGHTLY_MAX_AGE = 14400;
 /** Projectcache bewaart receipt-state; ophogen als die afleiding verandert. */
-const ELPI_PROJECT_CACHE_VERSION = 19;
+const ELPI_PROJECT_CACHE_VERSION = 20;
+/** Mímir max_age voor lookups tijdens hourly.php (≤ 30 min). */
+const ELPI_HOURLY_MAX_AGE = 1800;
 
 const ELPI_PROJECT_MANAGERS_TTL = ELPI_CACHE_TTL;
 
@@ -653,7 +655,7 @@ function elpis_allocate_project_supply(string $projectKey, array $lines, array $
             continue;
         }
         $key = strtoupper(trim((string) ($purchase['job_task_no'] ?? ''))) . '|' . $item;
-        $pool[$key][] = ['qty' => $open, 'date' => elpis_purchase_line_best_date($purchase)];
+        $pool[$key][] = ['qty' => $open, 'date' => elpis_purchase_line_best_date($purchase), 'doc' => $doc];
     }
 
     $freePool = [];
@@ -664,6 +666,7 @@ function elpis_allocate_project_supply(string $projectKey, array $lines, array $
         $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
         $line['alloc_unlinked_purchase'] = 0.0;
         $line['alloc_free_stock'] = 0.0;
+        $line['alloc_purchase_docs'] = [];
         $rest = elpis_line_coverage($line)['rest'];
         $key = strtoupper(trim((string) ($line['job_task_no'] ?? ''))) . '|' . $item;
         $dates = [];
@@ -678,6 +681,7 @@ function elpis_allocate_project_supply(string $projectKey, array $lines, array $
             $pool[$key][$i]['qty'] -= $use;
             $rest -= $use;
             $line['alloc_unlinked_purchase'] += $use;
+            $line['alloc_purchase_docs'][$supply['doc']] = true;
             if ($supply['date'] !== '') {
                 $dates[] = $supply['date'];
             }
@@ -4092,7 +4096,149 @@ function elpis_enrich_planning_lines_with_receipts(string $company, array $lines
         ]
     );
 
-    return elpis_apply_inbound_bins($linesByProject, elpis_fetch_inbound_bins($company, $linesByProject, $ttl));
+    $linesByProject = elpis_apply_inbound_bins($linesByProject, elpis_fetch_inbound_bins($company, $linesByProject, $ttl));
+
+    return elpis_attach_purchasers($linesByProject, elpis_fetch_purchasers($company, elpis_collect_line_purchase_docs($linesByProject), $ttl));
+}
+
+/**
+ * Inkooporders waar een regel op leunt: gekoppeld (LVS_Purchase_Order_No), gereserveerd en de
+ * verdeelde rest (elpis_allocate_project_supply). Voorraad/gepickt/te bestellen = geen order.
+ */
+function elpis_line_purchase_docs(array $line): array
+{
+    $docs = array_merge(
+        [(string) ($line['purchase_order_no'] ?? '')],
+        array_map('strval', array_keys(is_array($line['reserved_purchase_orders'] ?? null) ? $line['reserved_purchase_orders'] : [])),
+        array_map('strval', array_keys(is_array($line['alloc_purchase_docs'] ?? null) ? $line['alloc_purchase_docs'] : []))
+    );
+    $out = [];
+    foreach ($docs as $doc) {
+        $doc = strtoupper(trim($doc));
+        if ($doc !== '') {
+            $out[$doc] = $doc;
+        }
+    }
+
+    return array_values($out);
+}
+
+function elpis_collect_line_purchase_docs(array $linesByProject): array
+{
+    $docs = [];
+    foreach ($linesByProject as $lines) {
+        foreach ((array) $lines as $line) {
+            foreach (is_array($line) ? elpis_line_purchase_docs($line) : [] as $doc) {
+                $docs[$doc] = $doc;
+            }
+        }
+    }
+
+    return array_values($docs);
+}
+
+/**
+ * Besteller per inkooporder: PurchaseOrders.Purchaser_Code, anders PostedPurchaseReceipt (Order_No),
+ * anders GearchiveerdeInkoopkoppen. Code -> AppUserSetup (User_ID, Email) en SalespersonPurchaserCard
+ * (Name, E_Mail). Resultaat: ['docs' => [doc => code], 'people' => [code => [...]]].
+ */
+function elpis_fetch_purchasers(string $company, array $docs, int $ttl = ELPI_CACHE_TTL): array
+{
+    $byDoc = [];
+    $sources = [['PurchaseOrders', 'No'], ['PostedPurchaseReceipt', 'Order_No'], ['GearchiveerdeInkoopkoppen', 'No']];
+    foreach ($sources as [$entity, $field]) {
+        $missing = array_values(array_diff($docs, array_keys($byDoc)));
+        foreach (array_chunk(elpis_sort_odata_values($missing), ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
+            foreach (elpis_try_fetch_rows($company, $entity, ['$select' => $field . ',Purchaser_Code', '$filter' => elpis_odata_eq_list($field, $chunk)], $ttl) as $row) {
+                $doc = strtoupper(trim((string) ($row[$field] ?? '')));
+                $code = strtoupper(trim((string) ($row['Purchaser_Code'] ?? '')));
+                if ($doc !== '' && $code !== '' && !isset($byDoc[$doc])) {
+                    $byDoc[$doc] = $code;
+                }
+            }
+        }
+    }
+
+    $codes = elpis_sort_odata_values(array_values(array_unique($byDoc)));
+    $people = [];
+    foreach ($codes as $code) {
+        $people[$code] = ['code' => $code, 'name' => '', 'user_id' => '', 'email' => ''];
+    }
+    $cardEmail = [];
+    foreach (array_chunk($codes, ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
+        foreach (elpis_try_fetch_rows($company, 'SalespersonPurchaserCard', ['$select' => 'Code,Name,E_Mail', '$filter' => elpis_odata_eq_list('Code', $chunk)], $ttl) as $row) {
+            $code = strtoupper(trim((string) ($row['Code'] ?? '')));
+            if (isset($people[$code])) {
+                $people[$code]['name'] = trim((string) ($row['Name'] ?? ''));
+                $cardEmail[$code] = strtolower(trim((string) ($row['E_Mail'] ?? '')));
+            }
+        }
+        foreach (elpis_try_fetch_rows($company, ELPI_USER_SETUP_ENTITY, ['$select' => 'User_ID,Salespers_Purch_Code,Email', '$filter' => elpis_odata_eq_list('Salespers_Purch_Code', $chunk)], $ttl) as $row) {
+            $code = strtoupper(trim((string) ($row['Salespers_Purch_Code'] ?? '')));
+            $email = strtolower(trim((string) ($row['Email'] ?? '')));
+            if (isset($people[$code]) && $people[$code]['user_id'] === '') {
+                $people[$code]['user_id'] = elpis_normalize_bc_username((string) ($row['User_ID'] ?? ''));
+                $people[$code]['email'] = filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : '';
+            }
+        }
+    }
+    foreach ($people as $code => $person) {
+        if ($person['email'] === '' && filter_var($cardEmail[$code] ?? '', FILTER_VALIDATE_EMAIL)) {
+            $people[$code]['email'] = $cardEmail[$code];
+        }
+    }
+
+    return ['docs' => $byDoc, 'people' => $people];
+}
+
+/** Zet $line['purchasers'] (lijst personen) op elke regel met een inkooporder. */
+function elpis_attach_purchasers(array $linesByProject, array $purchasers): array
+{
+    foreach ($linesByProject as $projectNo => $lines) {
+        foreach ((array) $lines as $i => $line) {
+            if (!is_array($line)) {
+                continue;
+            }
+            $found = [];
+            foreach (elpis_line_purchase_docs($line) as $doc) {
+                $code = (string) ($purchasers['docs'][$doc] ?? '');
+                if ($code !== '') {
+                    $found[$code] = $purchasers['people'][$code] ?? ['code' => $code, 'name' => '', 'user_id' => '', 'email' => ''];
+                }
+            }
+            ksort($found);
+            $linesByProject[$projectNo][$i]['purchasers'] = array_values($found);
+        }
+    }
+
+    return $linesByProject;
+}
+
+/** Sleutel van een besteller voor filter en mail: BC-gebruiker, anders de inkopercode. */
+function elpis_purchaser_key(array $person): string
+{
+    $user = elpis_normalize_bc_username((string) ($person['user_id'] ?? ''));
+
+    return $user !== '' ? $user : strtoupper(trim((string) ($person['code'] ?? '')));
+}
+
+function elpis_purchaser_label(array $person): string
+{
+    $code = strtoupper(trim((string) ($person['code'] ?? '')));
+    $name = trim((string) ($person['name'] ?? ''));
+
+    return $name !== '' ? $name . ' (' . $code . ')' : $code;
+}
+
+function elpis_line_has_purchaser(array $line, string $key): bool
+{
+    foreach ((array) ($line['purchasers'] ?? []) as $person) {
+        if (is_array($person) && strcasecmp(elpis_purchaser_key($person), $key) === 0) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /** R: BinContent KVT/INBOUND per artikel (Quantity_Base), alleen projectartikelen, chunked + gecachet. */
@@ -4605,6 +4751,8 @@ function elpis_line_public_payload(array $line, string $projectNo): array
         'qty_picked' => (float) ($line['kvt_qty_picked'] ?? 0),
         'qty_picked_display' => elpis_format_qty((float) ($line['kvt_qty_picked'] ?? 0)) . '/' . elpis_format_qty((float) ($line['quantity'] ?? 0)),
         'qty_picked_tooltip' => sprintf(LOC('elpis.tip.picked'), elpis_format_qty((float) ($line['kvt_qty_picked'] ?? 0)), elpis_format_qty((float) ($line['quantity'] ?? 0))),
+        'purchaser' => implode(', ', array_map('elpis_purchaser_label', array_filter((array) ($line['purchasers'] ?? []), 'is_array'))),
+        'purchaser_keys' => array_values(array_map('elpis_purchaser_key', array_filter((array) ($line['purchasers'] ?? []), 'is_array'))),
         'is_problem' => elpis_line_is_problem($line),
         'expected_receipt' => elpis_line_expected_receipt_display($line),
         'expected_receipt_sort' => elpis_receipt_sort_value($line),

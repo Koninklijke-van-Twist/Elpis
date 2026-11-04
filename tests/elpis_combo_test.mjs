@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const php = readFileSync(join(root, 'web/index.php'), 'utf8');
-const start = php.indexOf("    var managerCombo = filterForm ? filterForm.querySelector('[data-elpis-manager-combo]')");
+const start = php.indexOf('    // Gedeelde combobox (PM en besteller)');
 const end = php.indexOf('    if (managerSelect && filterForm && !managerSelect.disabled) {', start);
 assert.ok(start > 0 && end > start, 'combobox-blok gevonden');
 const script = php.slice(start, end);
@@ -38,12 +38,12 @@ function ev(type, extra = {}) {
     return { type, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...extra };
 }
 const options = [['Alle', '__ALL__'], ['ADGROOT', 'ADGROOT'], ['ACKERMANS', 'ACK']].map(([v, d]) => { const o = el('option'); o.value = v; o.attrs['data-value'] = d; return o; });
-const doc = { activeElement: null, body: el('body'), createElement: el, querySelectorAll: () => options, getElementById: () => list };
+const doc = { activeElement: null, body: el('body'), createElement: el, querySelectorAll: () => options, getElementById: (id) => (id === 'elpis-manager-list' ? list : null) };
 const input = el('input'); input.value = 'Alle';
 const toggle = el('button');
 const list = el('ul'); list.hidden = true;
 const select = el('select'); select.value = '__ALL__'; select.disabled = false;
-const form = { querySelector: (s) => (s.includes('toggle') ? toggle : input) };
+const form = { querySelector: (s) => (s.includes('purchaser') ? null : (s.includes('toggle') ? toggle : input)) };
 
 // Simuleer een muisklik op het pijltje: mousedown (met focusverplaatsing tenzij preventDefault) en daarna click.
 function clickArrow() {
