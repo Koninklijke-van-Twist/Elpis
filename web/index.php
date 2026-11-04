@@ -628,8 +628,12 @@ if ($purchaser !== '') {
         .elpis-check input { width: auto !important; }
         .elpis-modal-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 0 12px 10px; }
         .elpis-project-item.is-problem-hidden { display: none; }
-        .elpis-combo { position: relative; display: block; }
-        .elpis-combo .elpis-manager-combo { width: 100%; padding-right: 36px; box-sizing: border-box; }
+        .elpis-combo { position: relative; display: block; width: 100%; min-width: 0; }
+        /* Eén vak per filter: label is één kolom; verborgen select/datalist nooit als los vak. */
+        .elpis-form label { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+        .elpis-form label > * { grid-column: 1; }
+        .elpis-form select[hidden], .elpis-form datalist { display: none !important; }
+        .elpis-combo .elpis-manager-combo { display: block; width: 100%; padding-right: 36px; box-sizing: border-box; }
         .elpis-combo-toggle { z-index: 2; touch-action: manipulation; position: absolute; top: 0; right: 0; bottom: 0; width: 34px; border: 0; background: transparent; color: var(--kvt-perkins-blue); cursor: pointer; display: flex; align-items: center; justify-content: center; }
         .elpis-combo-list { position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 2px); max-height: 280px; overflow-y: auto; margin: 0; padding: 4px 0; list-style: none; background: #fff; border: 1px solid var(--kvt-line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.15); font-weight: 400; }
         .elpis-combo-list[hidden] { display: none; }
@@ -637,7 +641,7 @@ if ($purchaser !== '') {
         .elpis-combo-list li.is-active, .elpis-combo-list li:hover { background: var(--kvt-row-ok, #e8f8ee); }
         .elpis-manager-combo.is-invalid { border-color: var(--kvt-danger) !important; background: var(--kvt-row-alert); }
         @media (min-width: 640px) {
-            .elpis-form-grid { grid-template-columns: 1fr 1fr; align-items: end; }
+            .elpis-form-grid { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: end; }
             .elpis-project-toolbar-filters { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: end; }
         }
         .elpis-loader {

@@ -13,6 +13,13 @@ const ELPIS_MAIL_FREQ_NEVER = 'never';
 const ELPIS_MAIL_CONTENT_LATE = 'late';
 const ELPIS_MAIL_CONTENT_UNCONFIRMED = 'unconfirmed';
 const ELPIS_MAIL_CONTENT_BOTH = 'both';
+// Inhoud (Tim 4 nov): alles / probleemregels (default) / aangepast (eigen statussen).
+// late/unconfirmed/both zijn oude waarden en worden bij het lezen gemigreerd.
+const ELPIS_MAIL_CONTENT_ALL = 'all';
+const ELPIS_MAIL_CONTENT_PROBLEMS = 'problems';
+const ELPIS_MAIL_CONTENT_CUSTOM = 'custom';
+// Altijd buiten "Alles": grijze statussen (Retour/n.v.t., Afgesloten) vragen geen actie.
+const ELPIS_MAIL_ALL_EXCLUDED_STATUSES = ['RETURN', 'CLOSED'];
 
 function elpis_mail_config_path(): string
 {
@@ -85,8 +92,45 @@ function elpis_default_mail_prefs(): array
         'hour' => ELPIS_MAIL_DEFAULT_HOUR,
         'frequency' => ELPIS_MAIL_FREQ_DAILY,
         'weekdays' => [1],
-        'content' => ELPIS_MAIL_CONTENT_BOTH,
+        'content' => ELPIS_MAIL_CONTENT_PROBLEMS,
+        'statuses' => [],
     ];
+}
+
+/** Rode statussen (tone alert): migratiedoel van 'Alleen te laat'. */
+function elpis_mail_red_statuses(): array
+{
+    return array_keys(array_filter(ELPI_LINE_STATUSES, static fn (array $d): bool => $d['tone'] === 'alert'));
+}
+
+/**
+ * Oude en nieuwe inhoud -> [content, statuses]. Mapping: both/leeg/onbekend -> problems;
+ * late -> custom + rode statussen; unconfirmed -> custom + NO_DATE; custom zonder geldige status -> problems.
+ */
+function elpis_mail_normalize_content($content, $statuses): array
+{
+    if (is_string($statuses)) {
+        $decoded = json_decode($statuses, true);
+        $statuses = is_array($decoded) ? $decoded : [];
+    }
+    $content = (string) $content;
+    if ($content === ELPIS_MAIL_CONTENT_LATE) {
+        return [ELPIS_MAIL_CONTENT_CUSTOM, elpis_mail_red_statuses()];
+    }
+    if ($content === ELPIS_MAIL_CONTENT_UNCONFIRMED) {
+        return [ELPIS_MAIL_CONTENT_CUSTOM, ['NO_DATE']];
+    }
+    if ($content === ELPIS_MAIL_CONTENT_ALL) {
+        return [ELPIS_MAIL_CONTENT_ALL, []];
+    }
+    if ($content === ELPIS_MAIL_CONTENT_CUSTOM) {
+        $valid = array_values(array_intersect(array_keys(ELPI_LINE_STATUSES), array_map('strval', is_array($statuses) ? $statuses : [])));
+        if ($valid !== []) {
+            return [ELPIS_MAIL_CONTENT_CUSTOM, $valid];
+        }
+    }
+
+    return [ELPIS_MAIL_CONTENT_PROBLEMS, []];
 }
 
 function elpis_normalize_mail_prefs(array $raw): array
@@ -97,10 +141,7 @@ function elpis_normalize_mail_prefs(array $raw): array
         $frequency = $defaults['frequency'];
     }
 
-    $content = (string) ($raw['content'] ?? $defaults['content']);
-    if (!in_array($content, [ELPIS_MAIL_CONTENT_LATE, ELPIS_MAIL_CONTENT_UNCONFIRMED, ELPIS_MAIL_CONTENT_BOTH], true)) {
-        $content = $defaults['content'];
-    }
+    [$content, $statuses] = elpis_mail_normalize_content($raw['content'] ?? null, $raw['statuses'] ?? []);
 
     $weekdays = [];
     $rawDays = $raw['weekdays'] ?? $defaults['weekdays'];
@@ -130,6 +171,7 @@ function elpis_normalize_mail_prefs(array $raw): array
         'frequency' => $frequency,
         'weekdays' => $weekdays,
         'content' => $content,
+        'statuses' => $statuses,
     ];
 }
 
@@ -146,6 +188,7 @@ function elpis_mail_prefs_for_email(string $email): array
     return elpis_normalize_mail_prefs([
         'frequency' => $stored['elpis_mail_frequency'] ?? null,
         'content' => $stored['elpis_mail_content'] ?? null,
+        'statuses' => $stored['elpis_mail_statuses'] ?? [],
         'weekdays' => $weekdays,
         'hour' => $stored['elpis_mail_hour'] ?? null,
     ]);
@@ -160,6 +203,7 @@ function elpis_save_mail_prefs(string $email, array $prefs): void
     $prefs = elpis_normalize_mail_prefs($prefs);
     saveUserPref($email, 'elpis_mail_frequency', $prefs['frequency']);
     saveUserPref($email, 'elpis_mail_content', $prefs['content']);
+    saveUserPref($email, 'elpis_mail_statuses', json_encode($prefs['statuses']));
     saveUserPref($email, 'elpis_mail_weekdays', json_encode($prefs['weekdays']));
     saveUserPref($email, 'elpis_mail_hour', (string) $prefs['hour']);
 }
@@ -181,17 +225,21 @@ function elpis_mail_should_send_on(array $prefs, string $dateYmd): bool
     return in_array($weekday, $prefs['weekdays'], true);
 }
 
-function elpis_mail_line_matches_content(array $line, string $content): bool
+/** Hoort de regel in de mail volgens de inhoudskeuze? $prefs = voorkeuren of (oude) content-string. */
+function elpis_mail_line_matches_content(array $line, $prefs): bool
 {
-    $state = (string) ($line['receipt_state'] ?? '');
-    if ($content === ELPIS_MAIL_CONTENT_LATE) {
-        return $state === 'late';
+    [$content, $statuses] = is_array($prefs)
+        ? elpis_mail_normalize_content($prefs['content'] ?? null, $prefs['statuses'] ?? [])
+        : elpis_mail_normalize_content($prefs, []);
+    $key = elpis_line_status($line)['key'];
+    if ($content === ELPIS_MAIL_CONTENT_ALL) {
+        return !in_array($key, ELPIS_MAIL_ALL_EXCLUDED_STATUSES, true);
     }
-    if ($content === ELPIS_MAIL_CONTENT_UNCONFIRMED) {
-        return $state === 'unconfirmed';
+    if ($content === ELPIS_MAIL_CONTENT_CUSTOM) {
+        return in_array($key, $statuses, true);
     }
 
-    return $state === 'late' || $state === 'unconfirmed';
+    return elpis_status_is_problem($key);
 }
 
 function elpis_preferences_url(): string
@@ -507,13 +555,13 @@ function elpis_mail_line_outstanding_qty(array $line): ?float
 }
 
 /**
- * PM-mail bevat exact de probleemregels (elpis_line_is_problem, dezelfde definitie als de knop
- * "Alleen probleemregels tonen" en het projectfilter). Daarnaast blijven gesloten werkorders
- * en de uitsluitlijst (excluded_item_nos in data/mail_config.json) gelden.
+ * Altijd uit de mail: gesloten werkorders en de uitsluitlijst (excluded_item_nos in
+ * data/mail_config.json). Welke statussen meegaan bepaalt de inhoudskeuze
+ * (elpis_mail_line_matches_content; default = probleemregels, zelfde definitie als de knop).
  */
 function elpis_mail_line_excluded(array $line, array $excludedItemNos = []): bool
 {
-    if (!elpis_line_is_problem($line) || elpis_line_work_order_closed($line)) {
+    if (elpis_line_work_order_closed($line)) {
         return true;
     }
     $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
@@ -940,7 +988,7 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null, ?int
             foreach ($kept as $line) {
                 $state = (string) ($line['receipt_state'] ?? '');
                 $stats['receipt_states'][$state === '' ? '-' : $state] = ($stats['receipt_states'][$state === '' ? '-' : $state] ?? 0) + 1;
-                if (elpis_mail_line_matches_content($line, $prefs['content'])) {
+                if (elpis_mail_line_matches_content($line, $prefs)) {
                     $matched[] = $line;
                 }
             }

@@ -360,7 +360,7 @@ $closed = elpis_apply_receipt_expectations(['P' => [planningLine([
     'remaining_qty' => 0,
 ])]], [], [], []);
 $closedLine = $closed['P'][0];
-if (($closedLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($closedLine) || elpis_mail_line_matches_content($closedLine, 'both')) {
+if (($closedLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($closedLine) || elpis_mail_line_matches_content($closedLine, 'late')) {
     fail('Remaining_Qty 0 is afgesloten en hoort niet in de mail: ' . json_encode($closedLine));
 }
 
@@ -381,7 +381,7 @@ $kvtCompletely = elpis_apply_receipt_expectations(['P' => [planningLine([
     'Quantity' => 2,
 ]], []);
 $kvtCompletelyLine = $kvtCompletely['P'][0];
-if (($kvtCompletelyLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($kvtCompletelyLine) || str_starts_with(elpis_line_expected_receipt_display($kvtCompletelyLine), 'Te laat') || elpis_mail_line_matches_content($kvtCompletelyLine, 'both') || empty($kvtCompletelyLine['completely_received'])) {
+if (($kvtCompletelyLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($kvtCompletelyLine) || str_starts_with(elpis_line_expected_receipt_display($kvtCompletelyLine), 'Te laat') || elpis_mail_line_matches_content($kvtCompletelyLine, 'late') || empty($kvtCompletelyLine['completely_received'])) {
     fail('LVS_Completely_Received van de planningsregel telt ook met een KVT-datum: ' . json_encode($kvtCompletelyLine));
 }
 if ((elpis_line_tooltips($kvtCompletelyLine)['expected_receipt'] ?? '') !== '(AppProjectInkoopPlanningsRegel -> LVS_Completely_Received)') {
@@ -459,7 +459,7 @@ foreach ($sample['WO153390'] as $sampleLine) {
         }
         continue;
     }
-    if (($sampleLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($sampleLine) || str_starts_with(elpis_line_expected_receipt_display($sampleLine), 'Te laat') || elpis_mail_line_matches_content($sampleLine, 'late') || elpis_mail_line_matches_content($sampleLine, 'both')) {
+    if (($sampleLine['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($sampleLine) || str_starts_with(elpis_line_expected_receipt_display($sampleLine), 'Te laat') || elpis_mail_line_matches_content($sampleLine, 'late') || elpis_mail_line_matches_content($sampleLine, 'late')) {
         fail($itemNo . ' is volledig ontvangen (Outstanding_Quantity 0) en hoort niet te laat of in de mail: ' . json_encode($sampleLine));
     }
     if ((elpis_line_tooltips($sampleLine)['expected_receipt'] ?? '') !== '(PurchaseLines -> Outstanding_Quantity)') {
@@ -679,7 +679,7 @@ $statusTNoWo = $withoutWo['153390'][4];
 if (($spoed['work_order_no'] ?? '') !== '' || ($spoed['purchase_order_no'] ?? '') !== 'PO12602236' || (int) ($spoed['purchase_order_line_no'] ?? 0) !== 20000) {
     fail('regel zonder werkorder koppelt op document en regelnummer: ' . json_encode($spoed));
 }
-if (($spoed['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($spoed) || str_starts_with(elpis_line_expected_receipt_display($spoed), 'Te laat') || elpis_line_row_tone($spoed) === 'alert' || elpis_mail_line_matches_content($spoed, 'both')) {
+if (($spoed['receipt_state'] ?? '') !== 'received' || elpis_line_is_late($spoed) || str_starts_with(elpis_line_expected_receipt_display($spoed), 'Te laat') || elpis_line_row_tone($spoed) === 'alert' || elpis_mail_line_matches_content($spoed, 'late')) {
     fail('PI20001429 zonder werkorder is volledig ontvangen en niet te laat: ' . json_encode($spoed));
 }
 if ((elpis_line_tooltips($spoed)['expected_receipt'] ?? '') !== '(PurchaseLines -> Outstanding_Quantity)') {
@@ -694,7 +694,7 @@ if (($picked['work_order_no'] ?? '') !== '4066161' || ($picked['purchase_order_n
 if (($partialNoWo['receipt_state'] ?? '') !== 'late' || !str_starts_with(elpis_line_expected_receipt_display($partialNoWo), 'Te laat') || !elpis_mail_line_matches_content($partialNoWo, 'both')) {
     fail('deels ontvangen zonder werkorder blijft te laat: ' . json_encode($partialNoWo));
 }
-if (elpis_line_status($statusTNoWo)['key'] !== 'RECEIVED_TO_PICK' || elpis_mail_line_matches_content($statusTNoWo, 'both')) {
+if (elpis_line_status($statusTNoWo)['key'] !== 'RECEIVED_TO_PICK' || elpis_mail_line_matches_content($statusTNoWo, 'late')) {
     fail('ontvangen regel zonder werkorder: Ontvangen, nog picken: ' . json_encode($statusTNoWo));
 }
 $ambiguousNoWo = elpis_apply_receipt_expectations(elpis_attach_inkoop_planning_rows([
@@ -982,7 +982,7 @@ $ledgerFull = elpis_apply_receipt_expectations(['P' => [planningLine([
     ],
 ]);
 $ledgerFullLine = $ledgerFull['P'][0];
-if (($ledgerFullLine['receipt_state'] ?? '') !== 'received' || elpis_line_expected_receipt_display($ledgerFullLine) !== 'Reeds ontvangen (11-10-2026)' || elpis_line_is_late($ledgerFullLine) || elpis_mail_line_matches_content($ledgerFullLine, 'both')) {
+if (($ledgerFullLine['receipt_state'] ?? '') !== 'received' || elpis_line_expected_receipt_display($ledgerFullLine) !== 'Reeds ontvangen (11-10-2026)' || elpis_line_is_late($ledgerFullLine) || elpis_mail_line_matches_content($ledgerFullLine, 'late')) {
     fail('ontvangstposten die de hoeveelheid dekken zijn ontvangen: ' . json_encode($ledgerFullLine));
 }
 
@@ -1064,7 +1064,7 @@ $ledgerBoth = elpis_apply_receipt_expectations(['P' => [
     ]],
 ]);
 foreach ($ledgerBoth['P'] as $ledgerBothLine) {
-    if (($ledgerBothLine['receipt_state'] ?? '') !== 'received' || elpis_mail_line_matches_content($ledgerBothLine, 'both')) {
+    if (($ledgerBothLine['receipt_state'] ?? '') !== 'received' || elpis_mail_line_matches_content($ledgerBothLine, 'late')) {
         fail('de som van de ontvangst dekt beide regels: ' . json_encode($ledgerBothLine));
     }
 }

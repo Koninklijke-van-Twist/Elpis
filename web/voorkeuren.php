@@ -23,20 +23,28 @@ function elpis_prefs_h(?string $value): string
 
 $email = elpis_current_user_email();
 $saved = false;
+$statusError = false;
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $frequency = (string) ($_POST['frequency'] ?? ELPIS_MAIL_FREQ_DAILY);
-    $content = (string) ($_POST['content'] ?? ELPIS_MAIL_CONTENT_BOTH);
+    $content = (string) ($_POST['content'] ?? ELPIS_MAIL_CONTENT_PROBLEMS);
+    $statuses = is_array($_POST['statuses'] ?? null) ? $_POST['statuses'] : [];
     $weekdays = $_POST['weekdays'] ?? [];
     if (!is_array($weekdays)) {
         $weekdays = [];
     }
-    elpis_save_mail_prefs($email, [
-        'frequency' => $frequency,
-        'content' => $content,
-        'weekdays' => $weekdays,
-        'hour' => $_POST['hour'] ?? null,
-    ]);
-    $saved = true;
+    // Aangepast vraagt minstens één status; anders niet opslaan.
+    if ($content === ELPIS_MAIL_CONTENT_CUSTOM && elpis_mail_normalize_content($content, $statuses)[0] !== ELPIS_MAIL_CONTENT_CUSTOM) {
+        $statusError = true;
+    } else {
+        elpis_save_mail_prefs($email, [
+            'frequency' => $frequency,
+            'content' => $content,
+            'statuses' => $statuses,
+            'weekdays' => $weekdays,
+            'hour' => $_POST['hour'] ?? null,
+        ]);
+        $saved = true;
+    }
 }
 
 $prefs = elpis_mail_prefs_for_email($email);
@@ -68,6 +76,7 @@ for ($day = 1; $day <= 7; $day++) {
         .elpis-days { display: grid; gap: 4px; margin-left: 24px; }
         .elpis-days.is-hidden { display: none; }
         .elpis-btn { font: inherit; font-weight: 700; border-radius: 10px; border: 1px solid var(--kvt-perkins-blue); background: var(--kvt-main-blue); color: #fff; padding: 12px 14px; }
+        .elpis-error { background: var(--kvt-row-alert); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
         .elpis-ok { background: var(--kvt-row-ok); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
         a.elpis-back { color: var(--kvt-perkins-blue); font-weight: 700; }
     </style>
@@ -83,6 +92,9 @@ for ($day = 1; $day <= 7; $day++) {
         <p class="elpis-muted"><?= elpis_prefs_h(LOC('elpis.prefs.intro')) ?></p>
         <?php if ($saved): ?>
             <p class="elpis-ok"><?= elpis_prefs_h(LOC('elpis.prefs.saved')) ?></p>
+        <?php endif; ?>
+        <?php if ($statusError): ?>
+            <p class="elpis-error"><?= elpis_prefs_h(LOC('elpis.prefs.statuses_required')) ?></p>
         <?php endif; ?>
         <form method="post" action="voorkeuren.php">
             <input type="hidden" name="lang" value="<?= elpis_prefs_h(getCurrentLanguage()) ?>">
@@ -111,15 +123,23 @@ for ($day = 1; $day <= 7; $day++) {
             <fieldset class="elpis-field">
                 <legend><?= elpis_prefs_h(LOC('elpis.prefs.content')) ?></legend>
                 <?php foreach ([
-                    ELPIS_MAIL_CONTENT_LATE => 'elpis.prefs.late_only',
-                    ELPIS_MAIL_CONTENT_UNCONFIRMED => 'elpis.prefs.unconfirmed_only',
-                    ELPIS_MAIL_CONTENT_BOTH => 'elpis.prefs.both',
+                    ELPIS_MAIL_CONTENT_ALL => 'elpis.prefs.content_all',
+                    ELPIS_MAIL_CONTENT_PROBLEMS => 'elpis.prefs.content_problems',
+                    ELPIS_MAIL_CONTENT_CUSTOM => 'elpis.prefs.custom',
                 ] as $value => $key): ?>
                     <label class="elpis-choice">
-                        <input type="radio" name="content" value="<?= elpis_prefs_h($value) ?>"<?= $prefs['content'] === $value ? ' checked' : '' ?>>
+                        <input type="radio" name="content" value="<?= elpis_prefs_h($value) ?>" data-elpis-content<?= $prefs['content'] === $value ? ' checked' : '' ?>>
                         <span><?= elpis_prefs_h(LOC($key)) ?></span>
                     </label>
                 <?php endforeach; ?>
+                <div class="elpis-days<?= $prefs['content'] === ELPIS_MAIL_CONTENT_CUSTOM ? '' : ' is-hidden' ?>" data-elpis-statuses>
+                    <?php foreach (ELPI_LINE_STATUSES as $statusKey => $def): ?>
+                        <label class="elpis-choice">
+                            <input type="checkbox" name="statuses[]" value="<?= elpis_prefs_h($statusKey) ?>"<?= in_array($statusKey, $prefs['statuses'], true) ? ' checked' : '' ?>>
+                            <span><?= elpis_prefs_h(LOC($def['label'])) ?></span>
+                        </label>
+                    <?php endforeach; ?>
+                </div>
             </fieldset>
             <label class="elpis-field">
                 <span><?= elpis_prefs_h(LOC('elpis.prefs.hour')) ?></span>
@@ -136,6 +156,24 @@ for ($day = 1; $day <= 7; $day++) {
 </div>
 <script>
 (function () {
+    var statuses = document.querySelector('[data-elpis-statuses]');
+    document.querySelectorAll('[data-elpis-content]').forEach(function (input) {
+        input.addEventListener('change', function () {
+            if (statuses && input.checked) {
+                statuses.classList.toggle('is-hidden', input.value !== 'custom');
+            }
+        });
+    });
+    var form = document.querySelector('form[action="voorkeuren.php"]');
+    if (form && statuses) {
+        form.addEventListener('submit', function (event) {
+            var custom = form.querySelector('[data-elpis-content][value="custom"]');
+            if (custom && custom.checked && !statuses.querySelector('input:checked')) {
+                event.preventDefault();
+                window.alert(<?= json_encode(LOC('elpis.prefs.statuses_required')) ?>);
+            }
+        });
+    }
     var days = document.querySelector('[data-elpis-days]');
     document.querySelectorAll('[data-elpis-frequency]').forEach(function (input) {
         input.addEventListener('change', function () {
