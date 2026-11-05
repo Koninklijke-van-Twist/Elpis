@@ -641,26 +641,73 @@ function elpis_mail_lateness_for_days(int $days): string
     return elpis_mail_lateness_text(max(1, intdiv($days, 30)), 'month');
 }
 
+/**
+ * Toelichting voor de mail: altijd minstens één zin, voor elke status uit
+ * elpis_line_status (inclusief vangnet STOCK en onbekende keys via fallback).
+ */
 function elpis_mail_line_reasons(array $line, ?string $today = null): array
 {
     $today = $today ?? elpis_today();
     $status = elpis_line_status($line, $today);
+    $key = (string) ($status['key'] ?? '');
+    $label = trim((string) ($status['label'] ?? ''));
     $reasons = [];
-    if ($status['date_missing']) {
-        $reasons[] = LOC('elpis.mail.reason.missing_date');
+
+    switch ($key) {
+        case 'RETURN':
+            $reasons[] = LOC('elpis.mail.reason.return');
+            break;
+        case 'CLOSED':
+            $reasons[] = LOC('elpis.mail.reason.closed');
+            break;
+        case 'PICKED':
+            $reasons[] = LOC('elpis.mail.reason.picked');
+            break;
+        case ELPI_STATUS_LATE:
+        case 'DELIVERY_LATE':
+            // Verstreken verwachte datum: telt vanaf die datum; anders hoeveel na de planningsdatum.
+            $need = elpis_line_need_date($line);
+            $from = $status['date'] !== '' && $status['date'] < $today ? $status['date'] : ($status['date'] === '' ? $need : '');
+            $days = $from !== '' ? elpis_mail_late_day_count($from, $today) : elpis_mail_late_day_count($need, $status['date']);
+            $reasons[] = elpis_mail_lateness_for_days($days > 0 ? $days : 1);
+            break;
+        case 'ORDER_TOO_LATE':
+            $reasons[] = $label !== '' ? $label : LOC('elpis.status.order_too_late');
+            break;
+        case 'NO_DATE':
+            $reasons[] = LOC('elpis.mail.reason.missing_date');
+            break;
+        case 'TO_ORDER':
+            // Tekst komt uit rest hieronder; anders fallback.
+            break;
+        case 'INBOUND':
+            $reasons[] = LOC('elpis.mail.reason.inbound');
+            break;
+        case 'PARTIAL_RECEIVED':
+        case 'RECEIVED_TO_PICK':
+            $reasons[] = LOC('elpis.mail.reason.received_to_pick');
+            break;
+        case 'PARTIAL_STOCK':
+        case 'STOCK':
+            $reasons[] = LOC('elpis.mail.reason.stock');
+            break;
+        case 'PARTIAL_ORDERED':
+        case 'ORDERED':
+            $display = elpis_format_display_date((string) ($status['date'] ?? ''));
+            $reasons[] = $display !== ''
+                ? LOC('elpis.mail.reason.ordered', $display)
+                : LOC('elpis.mail.reason.ordered_nodate');
+            break;
+        default:
+            $reasons[] = LOC('elpis.mail.reason.fallback', $label !== '' ? $label : ($key !== '' ? $key : '?'));
+            break;
     }
-    if (in_array($status['key'], [ELPI_STATUS_LATE, 'DELIVERY_LATE'], true)) {
-        // Verstreken verwachte datum: telt vanaf die datum; anders hoeveel na de planningsdatum.
-        $need = elpis_line_need_date($line);
-        $from = $status['date'] !== '' && $status['date'] < $today ? $status['date'] : ($status['date'] === '' ? $need : '');
-        $days = $from !== '' ? elpis_mail_late_day_count($from, $today) : elpis_mail_late_day_count($need, $status['date']);
-        $reasons[] = elpis_mail_lateness_for_days($days > 0 ? $days : 1);
-    }
-    if ($status['key'] === 'ORDER_TOO_LATE') {
-        $reasons[] = $status['label'];
-    }
+
     if ($status['rest'] > 0.00001) {
         $reasons[] = LOC('elpis.mail.reason.to_order', elpis_format_qty($status['rest']));
+    }
+    if ($reasons === []) {
+        $reasons[] = LOC('elpis.mail.reason.fallback', $label !== '' ? $label : ($key !== '' ? $key : '?'));
     }
 
     return $reasons;
