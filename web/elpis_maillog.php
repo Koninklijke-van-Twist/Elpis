@@ -71,27 +71,6 @@ function elpis_maillog_write(string $to, string $subject, ?array $lines, bool $o
     }
 }
 
-function elpis_maillog_read(string $dateYmd): array
-{
-    $path = elpis_maillog_dir() . '/' . $dateYmd . '.jsonl';
-    $handle = is_file($path) ? @fopen($path, 'r') : false;
-    if ($handle === false) {
-        return [];
-    }
-    flock($handle, LOCK_SH);
-    $entries = [];
-    while (($row = fgets($handle)) !== false) {
-        $entry = json_decode($row, true);
-        if (is_array($entry)) {
-            $entries[] = $entry;
-        }
-    }
-    flock($handle, LOCK_UN);
-    fclose($handle);
-
-    return $entries;
-}
-
 function elpis_maillog_cleanup(int $days = ELPIS_MAILLOG_RETENTION_DAYS): void
 {
     try {
