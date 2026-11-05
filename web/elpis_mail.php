@@ -539,22 +539,7 @@ function elpis_mail_send_smtp(
     return true;
 }
 
-function elpis_mail_send(string $to, string $subject, string $plain, string $html, ?array $lines = null): bool
-{
-    error_clear_last();
-    try {
-        $ok = elpis_mail_send_raw($to, $subject, $plain, $html);
-        $error = $ok ? '' : (string) (error_get_last()['message'] ?? 'verzenden mislukt');
-    } catch (Throwable $e) {
-        $ok = false;
-        $error = $e->getMessage();
-    }
-    elpis_maillog_write($to, $subject, $lines, $ok, $error);
-
-    return $ok;
-}
-
-function elpis_mail_send_raw(string $to, string $subject, string $plain, string $html): bool
+function elpis_mail_send(string $to, string $subject, string $plain, string $html): bool
 {
     $to = strtolower(trim($to));
     if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
@@ -1184,7 +1169,7 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null, ?int
             continue;
         }
         [$subject, $plain, $html] = elpis_digest_message($manager, $intended, $lines, $testMode);
-        $ok = elpis_mail_send($recipient, $subject, $plain, $html, $lines);
+        $ok = elpis_mail_send($recipient, $subject, $plain, $html);
         $sent += $ok ? 1 : 0;
         if ($ok && $hour !== null) {
             $sentLog[strtolower($intended !== '' ? $intended : $manager)] = $today;
@@ -1373,7 +1358,6 @@ function elpis_run_nightly(bool $force = false): array
             'by_company' => is_array($summary['by_company'] ?? null) ? $summary['by_company'] : [],
         ]);
         $mail = ['sent' => 0, 'deferred_to_hourly' => true];
-        elpis_maillog_cleanup();
         unset($summary['by_company']);
         elpis_nightly_write_state([
             'date' => $today,
