@@ -5021,3 +5021,4 @@ function elpis_debug_project_line(string $company, string $projectNo, string $it
 }
 
 require_once __DIR__ . '/elpis_mail.php';
+require_once __DIR__ . '/elpis_maillog.php';
