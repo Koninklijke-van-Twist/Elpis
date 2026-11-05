@@ -26,63 +26,12 @@ function elpis_mail_config_path(): string
     return elpis_data_dir() . '/mail_config.json';
 }
 
-function elpis_mail_default_excluded_pick_statuses(): array
-{
-    // KVT Germany pikt termijn-/projectartikelen (PI…) niet; RECEIVED_TO_PICK/STOCK e.d.
-    // horen daar niet in de digest. Te laat / te bestellen blijven gewoon staan.
-    return [
-        'KVT Germany GmbH' => [
-            'item_prefixes' => ['PI'],
-            'statuses' => ['RECEIVED_TO_PICK', 'STOCK', 'PARTIAL_RECEIVED', 'PARTIAL_STOCK', 'INBOUND'],
-        ],
-    ];
-}
-
-/** Normaliseer excluded_pick_statuses uit mail_config.json (bedrijf => prefixes + statussen). */
-function elpis_mail_normalize_excluded_pick_statuses($raw): array
-{
-    if (!is_array($raw)) {
-        return [];
-    }
-    $out = [];
-    foreach ($raw as $company => $rule) {
-        if (!is_array($rule)) {
-            continue;
-        }
-        $company = trim((string) $company);
-        if ($company === '') {
-            continue;
-        }
-        $prefixes = [];
-        foreach (is_array($rule['item_prefixes'] ?? null) ? $rule['item_prefixes'] : [] as $prefix) {
-            $prefix = strtoupper(trim((string) $prefix));
-            if ($prefix !== '') {
-                $prefixes[$prefix] = $prefix;
-            }
-        }
-        $statuses = [];
-        foreach (is_array($rule['statuses'] ?? null) ? $rule['statuses'] : [] as $status) {
-            $status = strtoupper(trim((string) $status));
-            if ($status !== '' && isset(ELPI_LINE_STATUSES[$status])) {
-                $statuses[$status] = $status;
-            }
-        }
-        $out[$company] = [
-            'item_prefixes' => array_values($prefixes),
-            'statuses' => array_values($statuses),
-        ];
-    }
-
-    return $out;
-}
-
 function elpis_mail_config(): array
 {
     $defaults = [
         'test_mode' => true,
         'test_recipient' => 'tfalken@kvt.nl',
         'excluded_item_nos' => [],
-        'excluded_pick_statuses' => elpis_mail_default_excluded_pick_statuses(),
     ];
     $path = elpis_mail_config_path();
     if (!is_file($path)) {
@@ -109,16 +58,10 @@ function elpis_mail_config(): array
         }
     }
 
-    // Ontbrekende sleutel = defaults; expliciet [] schakelt de bedrijfsuitsluiting uit.
-    $pick = array_key_exists('excluded_pick_statuses', $decoded)
-        ? elpis_mail_normalize_excluded_pick_statuses($decoded['excluded_pick_statuses'])
-        : $defaults['excluded_pick_statuses'];
-
     return [
         'test_mode' => array_key_exists('test_mode', $decoded) ? (bool) $decoded['test_mode'] : true,
         'test_recipient' => $recipient,
         'excluded_item_nos' => array_values($excluded),
-        'excluded_pick_statuses' => $pick,
     ];
 }
 
@@ -612,62 +555,22 @@ function elpis_mail_line_outstanding_qty(array $line): ?float
 }
 
 /**
- * Altijd uit de mail: gesloten werkorders, excluded_item_nos, en per bedrijf
- * excluded_pick_statuses (prefix + status) uit data/mail_config.json.
- * Welke overige statussen meegaan bepaalt de inhoudskeuze
- * (elpis_mail_line_matches_content; default = probleemregels).
+ * Altijd uit de mail: gesloten werkorders en de uitsluitlijst (excluded_item_nos in
+ * data/mail_config.json). Welke statussen meegaan bepaalt de inhoudskeuze
+ * (elpis_mail_line_matches_content; default = probleemregels, zelfde definitie als de knop).
  */
-function elpis_mail_line_excluded(array $line, array $excludedItemNos = [], string $company = '', array $excludedPickStatuses = []): bool
+function elpis_mail_line_excluded(array $line, array $excludedItemNos = []): bool
 {
     if (elpis_line_work_order_closed($line)) {
         return true;
     }
     $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
-    if ($item !== '' && in_array($item, $excludedItemNos, true)) {
-        return true;
-    }
-    if ($company === '' || $excludedPickStatuses === [] || $item === '') {
-        return false;
-    }
-    $rule = null;
-    foreach ($excludedPickStatuses as $name => $candidate) {
-        if (strcasecmp(trim((string) $name), trim($company)) === 0) {
-            $rule = $candidate;
-            break;
-        }
-    }
-    if (!is_array($rule)) {
-        return false;
-    }
-    $prefixes = is_array($rule['item_prefixes'] ?? null) ? $rule['item_prefixes'] : [];
-    $statuses = is_array($rule['statuses'] ?? null) ? $rule['statuses'] : [];
-    if ($prefixes === [] || $statuses === []) {
-        return false;
-    }
-    $matchPrefix = false;
-    foreach ($prefixes as $prefix) {
-        $prefix = strtoupper(trim((string) $prefix));
-        if ($prefix !== '' && str_starts_with($item, $prefix)) {
-            $matchPrefix = true;
-            break;
-        }
-    }
-    if (!$matchPrefix) {
-        return false;
-    }
-    $key = elpis_line_status($line)['key'];
 
-    return in_array($key, $statuses, true);
+    return $item !== '' && in_array($item, $excludedItemNos, true);
 }
 
-function elpis_digest_rows_for_manager(
-    array $projects,
-    array $linesByProject,
-    string $manager,
-    array $excludedItemNos = [],
-    string $company = '',
-    array $excludedPickStatuses = []
-): array {
+function elpis_digest_rows_for_manager(array $projects, array $linesByProject, string $manager, array $excludedItemNos = []): array
+{
     $manager = elpis_normalize_bc_username($manager);
     $rows = [];
     foreach ($projects as $project) {
@@ -681,14 +584,11 @@ function elpis_digest_rows_for_manager(
             if (!is_array($line) || (!$isManager && !elpis_line_has_purchaser($line, $manager))) {
                 continue;
             }
-            if (elpis_mail_line_excluded($line, $excludedItemNos, $company, $excludedPickStatuses)) {
+            if (elpis_mail_line_excluded($line, $excludedItemNos)) {
                 continue;
             }
             $line['project_no'] = $projectNo;
             $line['project_description'] = (string) ($project['description'] ?? '');
-            if ($company !== '') {
-                $line['company'] = $company;
-            }
             $rows[] = elpis_refresh_receipt_state($line);
         }
     }
@@ -812,6 +712,7 @@ function elpis_mail_line_reasons(array $line, ?string $today = null): array
 
     return $reasons;
 }
+
 function elpis_mail_join_reasons(array $reasons): string
 {
     $clean = [];
@@ -1126,10 +1027,8 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null, ?int
 
             // 'WO' = placeholderregel in BC (kostprijs 0, WO-nr in Opslaglocatie): altijd uitsluiten.
             $excludedItemNos = array_merge(['WO'], (array) ($config['excluded_item_nos'] ?? []));
-            $excludedPick = is_array($config['excluded_pick_statuses'] ?? null) ? $config['excluded_pick_statuses'] : [];
-            $companyName = (string) $company;
-            $allRows = elpis_digest_rows_for_manager($projects, $linesByProject, $manager, [], $companyName);
-            $kept = elpis_digest_rows_for_manager($projects, $linesByProject, $manager, $excludedItemNos, $companyName, $excludedPick);
+            $allRows = elpis_digest_rows_for_manager($projects, $linesByProject, $manager);
+            $kept = elpis_digest_rows_for_manager($projects, $linesByProject, $manager, $excludedItemNos);
             $stats['lines'] += count($allRows);
             $stats['lines_excluded'] += count($allRows) - count($kept);
             $matched = [];
