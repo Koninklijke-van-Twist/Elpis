@@ -22,7 +22,7 @@ function fail(string $message): void
 // Mapping
 $red = elpis_mail_red_statuses();
 sort($red);
-if ($red !== ['DELIVERY_LATE', 'LATE', 'ORDER_TOO_LATE']) {
+if ($red !== ['DELIVERY_LATE', 'LATE', 'LEAD_TIME_INVALID', 'ORDER_TOO_LATE']) {
     fail('rode statussen: ' . json_encode($red));
 }
 $cases = [

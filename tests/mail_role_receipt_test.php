@@ -139,11 +139,11 @@ $po = elpis_mail_po_statuses();
 $problemKeys = elpis_problem_status_keys();
 sort($po);
 sort($problemKeys);
-if ($po !== ['DELIVERY_LATE', 'INBOUND', 'LATE', 'NO_DATE', 'ORDER_TOO_LATE', 'PARTIAL_RECEIVED', 'PARTIAL_STOCK', 'RECEIVED_TO_PICK', 'STOCK', 'TO_ORDER']
+if ($po !== ['DELIVERY_LATE', 'INBOUND', 'LATE', 'LEAD_TIME_INVALID', 'NO_DATE', 'ORDER_TOO_LATE', 'PARTIAL_RECEIVED', 'PARTIAL_STOCK', 'RECEIVED_TO_PICK', 'STOCK', 'TO_ORDER']
     || $po !== $problemKeys) {
     fail('PO-preset wijkt af van de probleemstatussen: ' . json_encode($po));
 }
-if (ELPIS_MAIL_PURCHASER_STATUSES !== ['LATE', 'DELIVERY_LATE', 'ORDER_TOO_LATE', 'NO_DATE', 'TO_ORDER']) {
+if (ELPIS_MAIL_PURCHASER_STATUSES !== ['LEAD_TIME_INVALID', 'LATE', 'DELIVERY_LATE', 'ORDER_TOO_LATE', 'NO_DATE', 'TO_ORDER']) {
     fail('besteller-preset: ' . json_encode(ELPIS_MAIL_PURCHASER_STATUSES));
 }
 $purchaser = ['content' => 'purchaser'];

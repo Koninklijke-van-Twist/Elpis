@@ -82,6 +82,8 @@ const ELPI_LINE_STATUSES = [
     'RETURN' => ['label' => 'elpis.status.return', 'description' => 'elpis.status_info.return', 'tone' => 'muted', 'problem' => false, 'receipt_state' => 'not_required'],
     'CLOSED' => ['label' => 'elpis.status.closed', 'description' => 'elpis.status_info.closed', 'tone' => 'muted', 'problem' => false, 'receipt_state' => 'not_required'],
     'PICKED' => ['label' => 'elpis.status.picked', 'description' => 'elpis.status_info.picked', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'received'],
+    // Verwachte ontvangst op of vóór de besteldatum. order_date wordt nog niet uit BC gevuld.
+    'LEAD_TIME_INVALID' => ['label' => 'elpis.status.lead_time_invalid', 'description' => 'elpis.status_info.lead_time_invalid', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
     'LATE' => ['label' => 'elpis.status.late', 'description' => 'elpis.status_info.late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
     'DELIVERY_LATE' => ['label' => 'elpis.status.delivery_late', 'description' => 'elpis.status_info.delivery_late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
     'ORDER_TOO_LATE' => ['label' => 'elpis.status.order_too_late', 'description' => 'elpis.status_info.order_too_late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
@@ -143,6 +145,31 @@ function elpis_line_lead_time_days(array $line, ?string $today = null): ?int
     }
 
     return null;
+}
+
+/**
+ * Levertijd ongeldig: beide datums echt, verwachte ontvangst op of vóór besteldatum, inkoop nog open.
+ * Leeg of 0001-01-01 is onbekend. Ontvangen of gepickt blijft de bestaande status.
+ * order_date komt niet uit LVS_Latest_Order_Date; dat is de uiterste besteldatum.
+ */
+function elpis_line_lead_time_invalid(array $line): bool
+{
+    if (!empty($line['completely_received']) || !empty($line['completely_picked'])) {
+        return false;
+    }
+    if (!elpis_line_purchase_outstanding_open($line)) {
+        return false;
+    }
+    $expected = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
+    if ($expected === '') {
+        $expected = elpis_normalize_bc_date((string) ($line['alloc_unlinked_date'] ?? ''));
+    }
+    $ordered = elpis_normalize_bc_date((string) ($line['order_date'] ?? ''));
+    if ($expected === '' || $ordered === '') {
+        return false;
+    }
+
+    return substr($expected, 0, 10) <= substr($ordered, 0, 10);
 }
 
 /** Planningsdatum waartegen getoetst wordt: Planning_Date (bevestigd door Ariadne, = Planned_Delivery_Date). */
@@ -472,6 +499,7 @@ function elpis_line_status(array $line, ?string $today = null): array
         'RETURN' => $n <= 0.00001,
         'CLOSED' => function_exists('elpis_line_work_order_closed') && elpis_line_work_order_closed($line),
         'PICKED' => !empty($line['completely_picked']) || $p + 0.00001 >= $n,
+        'LEAD_TIME_INVALID' => elpis_line_lead_time_invalid($line),
         // Planningsdatum voorbij en nog niet binnen/gepicked.
         'LATE' => $need !== '' && $need < $today && $notOnHand,
         // Verwachte ontvangst na de planningsdatum, of de verwachte datum is al verstreken.
@@ -522,6 +550,9 @@ function elpis_line_status(array $line, ?string $today = null): array
         case 'ORDER_TOO_LATE':
             $parts[] = LOC('elpis.receipt.order_too_late', (string) $lead);
             break;
+        case 'LEAD_TIME_INVALID':
+            $parts[] = LOC('elpis.receipt.lead_time_invalid', $display);
+            break;
         case 'INBOUND':
             $parts[] = LOC('elpis.receipt.inbound', elpis_format_qty((float) $line['inbound_qty']));
             break;
@@ -568,6 +599,9 @@ function elpis_line_status(array $line, ?string $today = null): array
             $why = $latestOrder !== ''
                 ? LOC('elpis.reason.order_too_late_date', elpis_format_display_date($latestOrder))
                 : LOC('elpis.reason.order_too_late', trim((string) ($line['critical_lead_time'] ?? '')) !== '' ? trim((string) $line['critical_lead_time']) : ($lead . 'D'), $needDisplay);
+            break;
+        case 'LEAD_TIME_INVALID':
+            $why = LOC('elpis.reason.lead_time_invalid', $display !== '' ? $display : '—', elpis_format_display_date(substr(elpis_normalize_bc_date((string) ($line['order_date'] ?? '')), 0, 10)));
             break;
         case 'NO_DATE':
             $why = LOC('elpis.reason.no_date');

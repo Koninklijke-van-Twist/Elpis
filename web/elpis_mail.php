@@ -21,7 +21,7 @@ const ELPIS_MAIL_CONTENT_PROBLEMS = 'problems';
 const ELPIS_MAIL_CONTENT_PURCHASER = 'purchaser';
 const ELPIS_MAIL_CONTENT_CUSTOM = 'custom';
 // Besteller-preset: alleen leverproblemen vóór ontvangst. Geen magazijn, voorraad of pick.
-const ELPIS_MAIL_PURCHASER_STATUSES = ['LATE', 'DELIVERY_LATE', 'ORDER_TOO_LATE', 'NO_DATE', 'TO_ORDER'];
+const ELPIS_MAIL_PURCHASER_STATUSES = ['LEAD_TIME_INVALID', 'LATE', 'DELIVERY_LATE', 'ORDER_TOO_LATE', 'NO_DATE', 'TO_ORDER'];
 // Altijd buiten "Alles": grijze statussen (Retour/n.v.t., Afgesloten) vragen geen actie.
 const ELPIS_MAIL_ALL_EXCLUDED_STATUSES = ['RETURN', 'CLOSED'];
 // Geen status "Ontvangen". Dit is die grens: inkoop is binnen, rest is pick of magazijn.
@@ -733,6 +733,9 @@ function elpis_mail_line_reasons(array $line, ?string $today = null): array
             break;
         case 'ORDER_TOO_LATE':
             $reasons[] = $label !== '' ? $label : LOC('elpis.status.order_too_late');
+            break;
+        case 'LEAD_TIME_INVALID':
+            $reasons[] = LOC('elpis.mail.reason.lead_time_invalid');
             break;
         case 'NO_DATE':
             $reasons[] = LOC('elpis.mail.reason.missing_date');
