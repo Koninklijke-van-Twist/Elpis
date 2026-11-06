@@ -82,6 +82,8 @@ const ELPI_LINE_STATUSES = [
     'RETURN' => ['label' => 'elpis.status.return', 'description' => 'elpis.status_info.return', 'tone' => 'muted', 'problem' => false, 'receipt_state' => 'not_required'],
     'CLOSED' => ['label' => 'elpis.status.closed', 'description' => 'elpis.status_info.closed', 'tone' => 'muted', 'problem' => false, 'receipt_state' => 'not_required'],
     'PICKED' => ['label' => 'elpis.status.picked', 'description' => 'elpis.status_info.picked', 'tone' => 'ok', 'problem' => false, 'receipt_state' => 'received'],
+    // Verwachte ontvangst op of vóór de besteldatum van de inkoopregel.
+    'LEAD_TIME_INVALID' => ['label' => 'elpis.status.lead_time_invalid', 'description' => 'elpis.status_info.lead_time_invalid', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
     'LATE' => ['label' => 'elpis.status.late', 'description' => 'elpis.status_info.late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
     'DELIVERY_LATE' => ['label' => 'elpis.status.delivery_late', 'description' => 'elpis.status_info.delivery_late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
     'ORDER_TOO_LATE' => ['label' => 'elpis.status.order_too_late', 'description' => 'elpis.status_info.order_too_late', 'tone' => 'alert', 'problem' => true, 'receipt_state' => 'late'],
@@ -143,6 +145,27 @@ function elpis_line_lead_time_days(array $line, ?string $today = null): ?int
     }
 
     return null;
+}
+
+/**
+ * Levertijd ongeldig: Expected_Receipt_Date en Order_Date van dezelfde inkoopregel.
+ * Niet de werkorder-KVT-datum en niet alloc_unlinked_date. Leeg of 0001-01-01 is onbekend.
+ */
+function elpis_line_lead_time_invalid(array $line): bool
+{
+    if (!empty($line['completely_received']) || !empty($line['completely_picked'])) {
+        return false;
+    }
+    if (!elpis_line_purchase_outstanding_open($line)) {
+        return false;
+    }
+    $expected = elpis_normalize_bc_date((string) ($line['purchase_expected_receipt_date'] ?? ''));
+    $ordered = elpis_normalize_bc_date((string) ($line['order_date'] ?? ''));
+    if ($expected === '' || $ordered === '') {
+        return false;
+    }
+
+    return substr($expected, 0, 10) <= substr($ordered, 0, 10);
 }
 
 /** Planningsdatum waartegen getoetst wordt: Planning_Date (bevestigd door Ariadne, = Planned_Delivery_Date). */
@@ -460,6 +483,9 @@ function elpis_line_status(array $line, ?string $today = null): array
         $date = elpis_normalize_bc_date((string) ($line['alloc_unlinked_date'] ?? ''));
     }
     $date = $date === '' ? '' : substr($date, 0, 10);
+    $purchaseExpected = elpis_normalize_bc_date((string) ($line['purchase_expected_receipt_date'] ?? ''));
+    $purchaseExpected = $purchaseExpected === '' ? '' : substr($purchaseExpected, 0, 10);
+    $purchaseExpectedDisplay = elpis_format_display_date($purchaseExpected);
     $partial = $p > 0.00001 && $p + 0.00001 < $n;
     $need = elpis_line_need_date($line);
     $lead = elpis_line_lead_time_days($line, $today);
@@ -472,6 +498,7 @@ function elpis_line_status(array $line, ?string $today = null): array
         'RETURN' => $n <= 0.00001,
         'CLOSED' => function_exists('elpis_line_work_order_closed') && elpis_line_work_order_closed($line),
         'PICKED' => !empty($line['completely_picked']) || $p + 0.00001 >= $n,
+        'LEAD_TIME_INVALID' => elpis_line_lead_time_invalid($line),
         // Planningsdatum voorbij en nog niet binnen/gepicked.
         'LATE' => $need !== '' && $need < $today && $notOnHand,
         // Verwachte ontvangst na de planningsdatum, of de verwachte datum is al verstreken.
@@ -522,6 +549,9 @@ function elpis_line_status(array $line, ?string $today = null): array
         case 'ORDER_TOO_LATE':
             $parts[] = LOC('elpis.receipt.order_too_late', (string) $lead);
             break;
+        case 'LEAD_TIME_INVALID':
+            $parts[] = LOC('elpis.receipt.lead_time_invalid', $purchaseExpectedDisplay !== '' ? $purchaseExpectedDisplay : '—');
+            break;
         case 'INBOUND':
             $parts[] = LOC('elpis.receipt.inbound', elpis_format_qty((float) $line['inbound_qty']));
             break;
@@ -568,6 +598,9 @@ function elpis_line_status(array $line, ?string $today = null): array
             $why = $latestOrder !== ''
                 ? LOC('elpis.reason.order_too_late_date', elpis_format_display_date($latestOrder))
                 : LOC('elpis.reason.order_too_late', trim((string) ($line['critical_lead_time'] ?? '')) !== '' ? trim((string) $line['critical_lead_time']) : ($lead . 'D'), $needDisplay);
+            break;
+        case 'LEAD_TIME_INVALID':
+            $why = LOC('elpis.reason.lead_time_invalid', $purchaseExpectedDisplay !== '' ? $purchaseExpectedDisplay : '—', elpis_format_display_date(substr(elpis_normalize_bc_date((string) ($line['order_date'] ?? '')), 0, 10)));
             break;
         case 'NO_DATE':
             $why = LOC('elpis.reason.no_date');
@@ -2529,6 +2562,7 @@ function elpis_normalize_purchase_order_line(array $row): array
         'job_task_no' => trim((string) ($row['Job_Task_No'] ?? $row['job_task_no'] ?? '')),
         'job_line_type' => trim((string) ($row['Job_Line_Type'] ?? $row['job_line_type'] ?? '')),
         'expected_receipt_date' => elpis_normalize_bc_date((string) ($row['Expected_Receipt_Date'] ?? $row['expected_receipt_date'] ?? '')),
+        'order_date' => elpis_normalize_bc_date((string) ($row['Order_Date'] ?? $row['order_date'] ?? '')),
         'quantity' => array_key_exists('Quantity', $row) ? (float) $row['Quantity'] : (array_key_exists('quantity', $row) ? (float) $row['quantity'] : null),
         'outstanding_qty' => array_key_exists('Outstanding_Quantity', $row) ? (float) $row['Outstanding_Quantity'] : (array_key_exists('outstanding_qty', $row) ? (float) $row['outstanding_qty'] : null),
         'uom_code' => trim((string) ($row['Unit_of_Measure_Code'] ?? $row['uom_code'] ?? '')),
@@ -2815,7 +2849,7 @@ function elpis_fetch_open_purchase_order_lines_for_documents(string $company, ar
         ], $ttl));
     }
 
-    return elpis_apply_purchase_uom($company, $lines, $ttl);
+    return elpis_attach_purchase_order_dates($company, elpis_apply_purchase_uom($company, $lines, $ttl), $ttl);
 }
 
 function elpis_fetch_open_purchase_order_lines_for_jobs(string $company, array $jobNos, int $ttl = ELPI_CACHE_TTL): array
@@ -2836,7 +2870,238 @@ function elpis_fetch_open_purchase_order_lines_for_jobs(string $company, array $
         ], $ttl));
     }
 
-    return elpis_apply_purchase_uom($company, $lines, $ttl);
+    return elpis_attach_purchase_order_dates($company, elpis_apply_purchase_uom($company, $lines, $ttl), $ttl);
+}
+
+/** Besteldatum van de inkoopregel (AppPurchaseOrderSubform.Order_Date). Geen kop- of documentdatum. */
+function elpis_attach_purchase_order_dates(string $company, array $lines, int $ttl = ELPI_CACHE_TTL): array
+{
+    $docs = [];
+    foreach ($lines as $line) {
+        $doc = strtoupper(trim((string) ($line['document_no'] ?? '')));
+        if ($doc !== '') {
+            $docs[$doc] = $doc;
+        }
+    }
+    if ($company === '' || $docs === []) {
+        return $lines;
+    }
+
+    $dates = [];
+    foreach (array_chunk(elpis_sort_odata_values(array_values($docs)), ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
+        foreach (elpis_try_fetch_rows($company, 'AppPurchaseOrderSubform', [
+            '$select' => 'Document_Type,Document_No,Line_No,Order_Date',
+            '$filter' => elpis_and_filters([
+                "Document_Type eq 'Order'",
+                elpis_odata_eq_list('Document_No', $chunk),
+            ]),
+        ], $ttl) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $type = strtoupper(trim((string) ($row['Document_Type'] ?? '')));
+            if ($type !== '' && $type !== 'ORDER') {
+                continue;
+            }
+            $key = strtoupper(trim((string) ($row['Document_No'] ?? ''))) . '|' . (int) ($row['Line_No'] ?? 0);
+            $date = elpis_normalize_bc_date((string) ($row['Order_Date'] ?? ''));
+            if ($date !== '') {
+                $dates[$key] = substr($date, 0, 10);
+            }
+        }
+    }
+    foreach ($lines as $i => $line) {
+        $key = strtoupper(trim((string) ($line['document_no'] ?? ''))) . '|' . (int) ($line['line_no'] ?? 0);
+        if (($dates[$key] ?? '') !== '') {
+            $lines[$i]['order_date'] = $dates[$key];
+        }
+    }
+
+    return $lines;
+}
+
+/**
+ * Projectloze open inkoop: geen Job_No, en geen expliciete planningskoppeling op PO+regel.
+ * Job_Task_No '0' is geen project. Een latere voorraadreservering telt niet mee.
+ * Zelfde document+regel binnen één bedrijf telt één keer. Hoeveelheden blijven de regeleenheid.
+ *
+ * @param array<string, true> $planningLinks sleutel DOCUMENT|line
+ * @param array<string, true> $skipItems artikelnummer => taak/service
+ */
+function elpis_select_loose_purchase_lines(string $company, array $lines, array $planningLinks, array $skipItems): array
+{
+    $out = [];
+    $seen = [];
+    foreach ($lines as $line) {
+        if (!is_array($line)) {
+            continue;
+        }
+        $doc = strtoupper(trim((string) ($line['document_no'] ?? '')));
+        $lineNo = (int) ($line['line_no'] ?? 0);
+        if ($doc === '' || $lineNo <= 0) {
+            continue;
+        }
+        if ((float) ($line['quantity'] ?? 0) <= 0.00001 || (float) ($line['outstanding_qty'] ?? 0) <= 0.00001) {
+            continue;
+        }
+        if (trim((string) ($line['job_no'] ?? '')) !== '') {
+            continue;
+        }
+        if (isset($planningLinks[$doc . '|' . $lineNo])) {
+            continue;
+        }
+        $item = strtoupper(trim((string) ($line['item_no'] ?? '')));
+        if ($item !== '' && isset($skipItems[$item])) {
+            continue;
+        }
+        $key = strtoupper(trim($company)) . '|ORDER|' . $doc . '|' . $lineNo;
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $out[] = $line;
+    }
+
+    return $out;
+}
+
+function elpis_loose_purchase_status_line(array $purchase): array
+{
+    $quantity = (float) ($purchase['quantity'] ?? 0);
+    $outstanding = (float) ($purchase['outstanding_qty'] ?? 0);
+
+    return [
+        'item_no' => (string) ($purchase['item_no'] ?? ''),
+        'quantity' => $quantity,
+        'qty_received' => max(0.0, $quantity - $outstanding),
+        'purchase_order_no' => (string) ($purchase['document_no'] ?? ''),
+        'purchase_order_line_no' => (int) ($purchase['line_no'] ?? 0),
+        'purchase_outstanding_qty' => $outstanding,
+        'completely_received' => false,
+        'completely_picked' => false,
+        'kvt_qty_picked' => 0,
+        'free_stock' => 0,
+        'expected_receipt_date' => (string) ($purchase['expected_receipt_date'] ?? ''),
+        'purchase_expected_receipt_date' => (string) ($purchase['expected_receipt_date'] ?? ''),
+        'order_date' => (string) ($purchase['order_date'] ?? ''),
+        'planning_date' => '',
+        'uom_code' => (string) ($purchase['uom_code'] ?? ''),
+    ];
+}
+
+function elpis_fetch_outstanding_purchase_lines(string $company, int $ttl = ELPI_CACHE_TTL): array
+{
+    $company = trim($company);
+    if ($company === '') {
+        return [];
+    }
+    $rows = elpis_try_fetch_rows($company, ELPI_PURCHASE_ORDER_LINE_ENTITY, [
+        '$select' => elpis_purchase_line_select_fields(),
+        '$filter' => elpis_and_filters([
+            elpis_purchase_line_open_filter(),
+            'Outstanding_Quantity gt 0',
+        ]),
+    ], $ttl);
+    $lines = [];
+    foreach ($rows as $row) {
+        if (!is_array($row) || !elpis_row_is_item_type($row)) {
+            continue;
+        }
+        $line = elpis_normalize_purchase_order_line($row);
+        if ((float) ($line['outstanding_qty'] ?? 0) <= 0.00001 || (float) ($line['quantity'] ?? 0) <= 0.00001) {
+            continue;
+        }
+        $lines[] = $line;
+    }
+
+    return elpis_attach_purchase_order_dates($company, $lines, $ttl);
+}
+
+/** Expliciete planningskoppeling: WerkordersLines.LVS_Purchase_Order_No + regel, met een echt Job_No. */
+function elpis_fetch_explicit_purchase_links(string $company, array $documentNos, int $ttl = ELPI_CACHE_TTL): array
+{
+    $links = [];
+    $documentNos = elpis_sort_odata_values(elpis_normalize_project_nos($documentNos));
+    foreach (array_chunk($documentNos, ELPI_PLANNING_LINES_CHUNK_SIZE) as $chunk) {
+        foreach (elpis_try_fetch_rows($company, ELPI_PLANNING_LINE_ENTITY, [
+            '$select' => 'Job_No,LVS_Purchase_Order_No,LVS_Purchase_Order_Line_No',
+            '$filter' => elpis_odata_eq_list('LVS_Purchase_Order_No', $chunk),
+        ], $ttl) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $job = trim((string) ($row['Job_No'] ?? ''));
+            $doc = strtoupper(trim((string) ($row['LVS_Purchase_Order_No'] ?? '')));
+            $lineNo = (int) ($row['LVS_Purchase_Order_Line_No'] ?? 0);
+            if ($job === '' || $doc === '' || $lineNo <= 0) {
+                continue;
+            }
+            $links[$doc . '|' . $lineNo] = true;
+        }
+    }
+
+    return $links;
+}
+
+function elpis_load_loose_purchase_orders(string $company, int $ttl = ELPI_CACHE_TTL): array
+{
+    $lines = elpis_fetch_outstanding_purchase_lines($company, $ttl);
+    $docs = [];
+    $items = [];
+    foreach ($lines as $line) {
+        if (trim((string) ($line['job_no'] ?? '')) !== '') {
+            continue;
+        }
+        $doc = (string) ($line['document_no'] ?? '');
+        if ($doc !== '') {
+            $docs[$doc] = $doc;
+        }
+        $item = (string) ($line['item_no'] ?? '');
+        if ($item !== '') {
+            $items[$item] = $item;
+        }
+    }
+    $links = elpis_fetch_explicit_purchase_links($company, array_values($docs), $ttl);
+    $skip = [];
+    if ($items !== []) {
+        elpis_fetch_item_inventory($company, array_values($items), $ttl, null, $skip);
+    }
+    $loose = elpis_select_loose_purchase_lines($company, $lines, $links, $skip);
+    $purchasers = elpis_fetch_purchasers($company, array_values($docs), $ttl);
+    $rows = [];
+    foreach ($loose as $purchase) {
+        $status = elpis_line_status(elpis_loose_purchase_status_line($purchase));
+        $doc = strtoupper(trim((string) ($purchase['document_no'] ?? '')));
+        $code = (string) ($purchasers['docs'][$doc] ?? '');
+        $person = $code !== '' ? ($purchasers['people'][$code] ?? null) : null;
+        $rows[] = [
+            'document_no' => (string) ($purchase['document_no'] ?? ''),
+            'line_no' => (int) ($purchase['line_no'] ?? 0),
+            'item_no' => (string) ($purchase['item_no'] ?? ''),
+            'uom_code' => (string) ($purchase['uom_code'] ?? ''),
+            'quantity' => (float) ($purchase['quantity'] ?? 0),
+            'outstanding_qty' => (float) ($purchase['outstanding_qty'] ?? 0),
+            'expected_receipt_date' => (string) ($purchase['expected_receipt_date'] ?? ''),
+            'order_date' => (string) ($purchase['order_date'] ?? ''),
+            'status_key' => $status['key'],
+            'status_label' => $status['label'],
+            'is_problem' => elpis_status_is_problem($status['key']),
+            'purchaser_label' => is_array($person) ? elpis_purchaser_label($person) : '',
+            'purchasers' => is_array($person) ? [$person] : [],
+        ];
+    }
+    usort($rows, static function (array $left, array $right): int {
+        $leftDate = $left['expected_receipt_date'] !== '' ? $left['expected_receipt_date'] : '9999-99-99';
+        $rightDate = $right['expected_receipt_date'] !== '' ? $right['expected_receipt_date'] : '9999-99-99';
+        if ($leftDate !== $rightDate) {
+            return $leftDate <=> $rightDate;
+        }
+        $byDoc = strcasecmp($left['document_no'], $right['document_no']);
+
+        return $byDoc !== 0 ? $byDoc : ($left['line_no'] <=> $right['line_no']);
+    });
+
+    return $rows;
 }
 
 function elpis_merge_purchase_order_lines(array ...$sets): array
@@ -3997,6 +4262,13 @@ function elpis_finalize_line(
     // maar een gesloten inkoopregel mag daar niet meer 'Te laat' van maken.
     $purchase = elpis_match_purchase_line($line, $byDocLine, $byDocItem);
     if (is_array($purchase)) {
+        $orderDate = elpis_normalize_bc_date((string) ($purchase['order_date'] ?? ''));
+        if ($orderDate !== '') {
+            // Alleen de besteldatum van de inkoopregel, nooit de kop of documentdatum.
+            $line['order_date'] = substr($orderDate, 0, 10);
+        }
+        $purchaseExpected = elpis_normalize_bc_date((string) ($purchase['expected_receipt_date'] ?? ''));
+        $line['purchase_expected_receipt_date'] = $purchaseExpected === '' ? '' : substr($purchaseExpected, 0, 10);
         if (array_key_exists('outstanding_qty', $purchase) && $purchase['outstanding_qty'] !== null && $purchase['outstanding_qty'] !== '') {
             $line['purchase_outstanding_qty'] = (float) $purchase['outstanding_qty'];
         }

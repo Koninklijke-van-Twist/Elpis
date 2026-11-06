@@ -40,6 +40,7 @@ $fixtures = [
     'LATE' => ['quantity' => 1, 'planning_date' => '2025-01-01', 'purchase_order_no' => '', 'purchase_outstanding_qty' => 0, 'free_stock' => 0],
     'DELIVERY_LATE' => ['quantity' => 1, 'purchase_order_no' => 'PO1', 'purchase_outstanding_qty' => 1, 'expected_receipt_date' => '2025-07-31'],
     'ORDER_TOO_LATE' => ['quantity' => 1, 'planning_date' => '2026-11-06', 'latest_order_date' => '2026-11-01', 'purchase_order_no' => '', 'free_stock' => 0],
+    'LEAD_TIME_INVALID' => ['quantity' => 1, 'purchase_order_no' => 'PO1', 'purchase_outstanding_qty' => 1, 'purchase_expected_receipt_date' => '2026-10-01', 'order_date' => '2026-10-01', 'expected_receipt_date' => '2026-12-01', 'planning_date' => '2026-12-15'],
     'NO_DATE' => ['quantity' => 1, 'purchase_order_no' => 'PO1', 'purchase_outstanding_qty' => 1, 'expected_receipt_date' => ''],
     'TO_ORDER' => ['quantity' => 2, 'purchase_order_no' => '', 'free_stock' => 0],
     'INBOUND' => ['quantity' => 1, 'purchase_order_no' => 'PO1', 'purchase_outstanding_qty' => 0, 'completely_received' => true, 'qty_received' => 1, 'inbound_qty' => 1, 'free_stock' => 0],

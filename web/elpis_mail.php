@@ -13,13 +13,20 @@ const ELPIS_MAIL_FREQ_NEVER = 'never';
 const ELPIS_MAIL_CONTENT_LATE = 'late';
 const ELPIS_MAIL_CONTENT_UNCONFIRMED = 'unconfirmed';
 const ELPIS_MAIL_CONTENT_BOTH = 'both';
-// Inhoud (Tim 4 nov): alles / probleemregels (default) / aangepast (eigen statussen).
+// Inhoud: alles / PO-preset (opgeslagen als problems, default) / besteller-preset / aangepast.
 // late/unconfirmed/both zijn oude waarden en worden bij het lezen gemigreerd.
+// problems blijft de sleutel: bestaande gebruikers houden de ruime probleemselectie.
 const ELPIS_MAIL_CONTENT_ALL = 'all';
 const ELPIS_MAIL_CONTENT_PROBLEMS = 'problems';
+const ELPIS_MAIL_CONTENT_PURCHASER = 'purchaser';
 const ELPIS_MAIL_CONTENT_CUSTOM = 'custom';
+// Besteller-preset: alleen leverproblemen vóór ontvangst. Geen magazijn, voorraad of pick.
+const ELPIS_MAIL_PURCHASER_STATUSES = ['LEAD_TIME_INVALID', 'LATE', 'DELIVERY_LATE', 'ORDER_TOO_LATE', 'NO_DATE', 'TO_ORDER'];
 // Altijd buiten "Alles": grijze statussen (Retour/n.v.t., Afgesloten) vragen geen actie.
 const ELPIS_MAIL_ALL_EXCLUDED_STATUSES = ['RETURN', 'CLOSED'];
+// Geen status "Ontvangen". Dit is die grens: inkoop is binnen, rest is pick of magazijn.
+// Deels ontvangen met nog open inkoop blijft een eerdere status. Vrije voorraad hoort hier niet bij.
+const ELPIS_MAIL_PAST_RECEIPT_STATUSES = ['PICKED', 'INBOUND', 'PARTIAL_RECEIVED', 'RECEIVED_TO_PICK'];
 
 function elpis_mail_config_path(): string
 {
@@ -103,9 +110,16 @@ function elpis_mail_red_statuses(): array
     return array_keys(array_filter(ELPI_LINE_STATUSES, static fn (array $d): bool => $d['tone'] === 'alert'));
 }
 
+/** PO-preset = de bestaande probleemstatussen. */
+function elpis_mail_po_statuses(): array
+{
+    return elpis_problem_status_keys();
+}
+
 /**
- * Oude en nieuwe inhoud -> [content, statuses]. Mapping: both/leeg/onbekend -> problems;
- * late -> custom + rode statussen; unconfirmed -> custom + NO_DATE; custom zonder geldige status -> problems.
+ * Oude en nieuwe inhoud -> [content, statuses]. Mapping: both/leeg/onbekend -> problems (PO-preset);
+ * purchaser blijft de besteller-preset; late -> custom + rode statussen; unconfirmed -> custom + NO_DATE;
+ * custom zonder geldige status -> problems.
  */
 function elpis_mail_normalize_content($content, $statuses): array
 {
@@ -122,6 +136,9 @@ function elpis_mail_normalize_content($content, $statuses): array
     }
     if ($content === ELPIS_MAIL_CONTENT_ALL) {
         return [ELPIS_MAIL_CONTENT_ALL, []];
+    }
+    if ($content === ELPIS_MAIL_CONTENT_PURCHASER) {
+        return [ELPIS_MAIL_CONTENT_PURCHASER, []];
     }
     if ($content === ELPIS_MAIL_CONTENT_CUSTOM) {
         $valid = array_values(array_intersect(array_keys(ELPI_LINE_STATUSES), array_map('strval', is_array($statuses) ? $statuses : [])));
@@ -238,8 +255,29 @@ function elpis_mail_line_matches_content(array $line, $prefs): bool
     if ($content === ELPIS_MAIL_CONTENT_CUSTOM) {
         return in_array($key, $statuses, true);
     }
+    if ($content === ELPIS_MAIL_CONTENT_PURCHASER) {
+        return in_array($key, ELPIS_MAIL_PURCHASER_STATUSES, true);
+    }
 
     return elpis_status_is_problem($key);
+}
+
+function elpis_mail_line_past_receipt(array $line): bool
+{
+    return in_array(elpis_line_status($line)['key'], ELPIS_MAIL_PAST_RECEIPT_STATUSES, true);
+}
+
+/**
+ * Inhoudskeuze, plus: alleen-besteller valt af zodra de regel voorbij ontvangst is.
+ * Projectmanager (ook bij dubbelrol op dezelfde regel) volgt de inhoudskeuze.
+ */
+function elpis_mail_line_included(array $line, $prefs): bool
+{
+    if (!elpis_mail_line_matches_content($line, $prefs)) {
+        return false;
+    }
+
+    return empty($line['mail_as_purchaser']) || !empty($line['mail_as_manager']) || !elpis_mail_line_past_receipt($line);
 }
 
 function elpis_preferences_url(): string
@@ -596,7 +634,11 @@ function elpis_digest_rows_for_manager(array $projects, array $linesByProject, s
         $isManager = strcasecmp((string) ($project['project_manager'] ?? ''), $manager) === 0;
         $projectNo = (string) ($project['no'] ?? '');
         foreach ($linesByProject[$projectNo] ?? [] as $line) {
-            if (!is_array($line) || (!$isManager && !elpis_line_has_purchaser($line, $manager))) {
+            if (!is_array($line)) {
+                continue;
+            }
+            $isPurchaser = elpis_line_has_purchaser($line, $manager);
+            if (!$isManager && !$isPurchaser) {
                 continue;
             }
             if (elpis_mail_line_excluded($line, $excludedItemNos)) {
@@ -604,6 +646,9 @@ function elpis_digest_rows_for_manager(array $projects, array $linesByProject, s
             }
             $line['project_no'] = $projectNo;
             $line['project_description'] = (string) ($project['description'] ?? '');
+            $line['project_manager'] = (string) ($project['project_manager'] ?? '');
+            $line['mail_as_manager'] = $isManager;
+            $line['mail_as_purchaser'] = $isPurchaser;
             $rows[] = elpis_refresh_receipt_state($line);
         }
     }
@@ -688,6 +733,9 @@ function elpis_mail_line_reasons(array $line, ?string $today = null): array
             break;
         case 'ORDER_TOO_LATE':
             $reasons[] = $label !== '' ? $label : LOC('elpis.status.order_too_late');
+            break;
+        case 'LEAD_TIME_INVALID':
+            $reasons[] = LOC('elpis.mail.reason.lead_time_invalid');
             break;
         case 'NO_DATE':
             $reasons[] = LOC('elpis.mail.reason.missing_date');
@@ -803,8 +851,99 @@ function elpis_ticket_url(array $headers, array $values, string $itemNo, string 
     return elpis_asclepius_url() . '?' . $query;
 }
 
+/** Verwachte ontvangstdatum (zelfde datum als de status). Leeg sorteert achteraan. */
+function elpis_mail_receipt_sort_key(array $line): string
+{
+    $date = (string) (elpis_line_status($line)['date'] ?? '');
+
+    return $date !== '' ? $date : '9999-99-99';
+}
+
+/** Per bedrijfsblok oud → nieuw; gelijke datum houdt de oorspronkelijke volgorde. */
+function elpis_mail_sort_lines(array $lines): array
+{
+    $blocks = [];
+    $index = 0;
+    foreach ($lines as $line) {
+        if (!is_array($line)) {
+            continue;
+        }
+        $company = (string) ($line['company'] ?? '');
+        $last = count($blocks) - 1;
+        if ($last < 0 || $blocks[$last]['company'] !== $company) {
+            $blocks[] = ['company' => $company, 'lines' => []];
+            $last++;
+        }
+        $line['_mail_order'] = $index++;
+        $blocks[$last]['lines'][] = $line;
+    }
+
+    $sorted = [];
+    foreach ($blocks as $block) {
+        $rows = $block['lines'];
+        usort($rows, static function (array $left, array $right): int {
+            $byDate = elpis_mail_receipt_sort_key($left) <=> elpis_mail_receipt_sort_key($right);
+
+            return $byDate !== 0 ? $byDate : ($left['_mail_order'] <=> $right['_mail_order']);
+        });
+        foreach ($rows as $row) {
+            unset($row['_mail_order']);
+            $sorted[] = $row;
+        }
+    }
+
+    return $sorted;
+}
+
+function elpis_mail_purchaser_text(array $line): string
+{
+    $labels = [];
+    foreach ((array) ($line['purchasers'] ?? []) as $person) {
+        if (!is_array($person)) {
+            continue;
+        }
+        $label = elpis_purchaser_label($person);
+        if ($label !== '') {
+            $labels[] = $label;
+        }
+    }
+
+    return implode(', ', $labels);
+}
+
+/** PO-kolom als de ontvanger ergens besteller is; Besteller-kolom als die ergens projectmanager is. */
+function elpis_mail_role_columns(array $lines): array
+{
+    $showPo = false;
+    $showPurchaser = false;
+    foreach ($lines as $line) {
+        if (!is_array($line)) {
+            continue;
+        }
+        $showPo = $showPo || !empty($line['mail_as_purchaser']);
+        $showPurchaser = $showPurchaser || !empty($line['mail_as_manager']);
+    }
+    $columns = [];
+    if ($showPo) {
+        $columns[] = 'po';
+    }
+    if ($showPurchaser) {
+        $columns[] = 'purchaser';
+    }
+
+    return $columns;
+}
+
+function elpis_mail_role_value(array $line, string $column): string
+{
+    return $column === 'po'
+        ? elpis_format_manager_label((string) ($line['project_manager'] ?? ''))
+        : elpis_mail_purchaser_text($line);
+}
+
 function elpis_digest_message(string $manager, string $intendedEmail, array $lines, bool $testMode): array
 {
+    $lines = elpis_mail_sort_lines($lines);
     $count = count($lines);
     $subject = LOC('elpis.mail.subject', $count, elpis_format_manager_label($manager));
     if ($testMode) {
@@ -816,6 +955,11 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
     $lineColor = '#c9d7eb';
     $cell = $font . 'padding:11px 10px;border-bottom:1px solid ' . $lineColor . ';text-align:left;vertical-align:top;font-size:14px;';
     $head = $font . 'background-color:#00529B;color:#ffffff;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;text-align:left;padding:11px 10px;border-bottom:0;';
+    $roleColumns = elpis_mail_role_columns($lines);
+    $roleHeaders = [];
+    foreach ($roleColumns as $column) {
+        $roleHeaders[] = LOC($column === 'po' ? 'elpis.mail.col.po' : 'elpis.col.purchaser');
+    }
     $headers = [
         LOC('elpis.mail.col.project'),
         LOC('elpis.col.workorder'),
@@ -823,6 +967,7 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
         LOC('elpis.col.description'),
         LOC('elpis.mail.col.receipt'),
         LOC('elpis.mail.col.note'),
+        ...$roleHeaders,
     ];
     $headHtml = '';
     foreach ($headers as $header) {
@@ -842,7 +987,7 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
         if ($company !== '' && $company !== $currentCompany) {
             $currentCompany = $company;
             $plainLines[] = ($plainLines === [] ? '' : "\n") . '== ' . $company . ' ==';
-            $htmlRows .= '<tr><td colspan="7" bgcolor="#eef6fc" style="' . $font . 'background-color:#eef6fc;color:#00529B;font-size:15px;font-weight:700;padding:12px 10px;border-bottom:1px solid ' . $lineColor . ';">'
+            $htmlRows .= '<tr><td colspan="' . (count($headers) + 1) . '" bgcolor="#eef6fc" style="' . $font . 'background-color:#eef6fc;color:#00529B;font-size:15px;font-weight:700;padding:12px 10px;border-bottom:1px solid ' . $lineColor . ';">'
                 . elpis_mail_h($company) . '</td></tr>';
         }
         $line = elpis_refresh_receipt_state($line);
@@ -873,8 +1018,13 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
             $whenColor = 'color:#111827;';
             $noteColor = 'color:#111827;';
         }
-        $ticketUrl = elpis_ticket_url($headers, [$projectNo, $workOrder, $item, $description, $when, $note], $item, $projectNo);
-        $plainLines[] = $projectNo . ' | ' . $workOrder . ' | ' . $item . ' | ' . $description . ' | ' . $when . ' | ' . $note
+        $roleValues = [];
+        foreach ($roleColumns as $column) {
+            $roleValues[] = elpis_mail_role_value($line, $column);
+        }
+        $ticketValues = [$projectNo, $workOrder, $item, $description, $when, $note, ...$roleValues];
+        $ticketUrl = elpis_ticket_url($headers, $ticketValues, $item, $projectNo);
+        $plainLines[] = implode(' | ', $ticketValues)
             . "\n  " . LOC('elpis.mail.ticket_link') . ': ' . $ticketUrl;
         $values = [$projectNo, $workOrder, $item, $description, $when];
         $colors = [$textColor, $textColor, $textColor, $textColor, $whenColor];
@@ -885,6 +1035,10 @@ function elpis_digest_message(string $manager, string $intendedEmail, array $lin
         }
         $htmlRows .= '<td bgcolor="' . $rowBg . '" style="' . $cell . 'background-color:' . $rowBg . ';' . $noteColor . '">'
             . elpis_mail_reasons_html($reasons, $font . 'font-size:14px;' . $noteColor) . '</td>';
+        foreach ($roleValues as $roleValue) {
+            $htmlRows .= '<td bgcolor="' . $rowBg . '" style="' . $cell . 'background-color:' . $rowBg . ';' . $textColor . '">'
+                . elpis_mail_h($roleValue) . '</td>';
+        }
         $htmlRows .= '<td bgcolor="' . $rowBg . '" style="' . $cell . 'background-color:' . $rowBg . ';white-space:nowrap;">'
             . '<a href="' . elpis_mail_h($ticketUrl) . '" style="' . $font . 'display:inline-block;background-color:#00529B;color:#ffffff;font-size:13px;font-weight:700;text-decoration:none;padding:6px 10px;border-radius:6px;">'
             . elpis_mail_h(LOC('elpis.mail.ticket_link')) . '</a></td>';
@@ -1050,7 +1204,7 @@ function elpis_dispatch_pm_digests(array $byCompany, ?string $today = null, ?int
             foreach ($kept as $line) {
                 $state = (string) ($line['receipt_state'] ?? '');
                 $stats['receipt_states'][$state === '' ? '-' : $state] = ($stats['receipt_states'][$state === '' ? '-' : $state] ?? 0) + 1;
-                if (elpis_mail_line_matches_content($line, $prefs)) {
+                if (elpis_mail_line_included($line, $prefs)) {
                     $matched[] = $line;
                 }
             }

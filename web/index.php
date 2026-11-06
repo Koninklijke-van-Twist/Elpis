@@ -294,6 +294,21 @@ if ($purchaser !== '') {
     $projects = array_values(array_filter($projects, static fn (array $p): bool => isset($purchaserProjects[$purchaser][(string) ($p['no'] ?? '')])));
 }
 
+$looseOrders = [];
+if ($companyChosen && !$deferProjectsLoad) {
+    try {
+        $looseOrders = elpis_load_loose_purchase_orders($company);
+    } catch (Throwable $loadError) {
+        $looseOrders = [];
+    }
+    if ($purchaser !== '') {
+        $looseOrders = array_values(array_filter(
+            $looseOrders,
+            static fn (array $row): bool => elpis_line_has_purchaser($row, $purchaser)
+        ));
+    }
+}
+
 ?><!DOCTYPE html>
 <html lang="<?= elpis_h(getHtmlLang()) ?>">
 <head>
@@ -627,7 +642,10 @@ if ($purchaser !== '') {
         .elpis-check { display: flex !important; align-items: center; gap: 8px; font-weight: 600; }
         .elpis-check input { width: auto !important; }
         .elpis-modal-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 0 12px 10px; }
-        .elpis-project-item.is-problem-hidden { display: none; }
+        .elpis-project-item.is-problem-hidden, .elpis-loose-order.is-problem-hidden, .elpis-loose-order.is-filtered-out { display: none; }
+        .elpis-loose-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+        .elpis-loose-order { padding: 10px 0; border-bottom: 1px solid var(--kvt-line); }
+        .elpis-loose-order strong { color: var(--kvt-perkins-blue); }
         .elpis-combo { position: relative; display: block; width: 100%; min-width: 0; }
         /* Eén vak per filter: label is één kolom; verborgen select/datalist nooit als los vak. */
         .elpis-form label { grid-template-columns: minmax(0, 1fr); min-width: 0; }
@@ -917,6 +935,36 @@ if ($purchaser !== '') {
                 </ul>
             <?php endif; ?>
         </section>
+        <?php if (!$deferProjectsLoad): ?>
+        <section class="elpis-card">
+            <h2><?= elpis_h(LOC('elpis.section.loose_orders')) ?></h2>
+            <p class="elpis-muted"><?= elpis_h(LOC('elpis.loose.intro')) ?></p>
+            <?php if ($looseOrders === []): ?>
+                <p class="elpis-muted"><?= elpis_h(LOC('elpis.loose.empty')) ?></p>
+            <?php else: ?>
+                <ul class="elpis-loose-list">
+                    <?php foreach ($looseOrders as $order): ?>
+                        <?php
+                        $purchaserText = $order['purchaser_label'] !== '' ? $order['purchaser_label'] : LOC('elpis.purchaser.unknown');
+                        $expectedText = elpis_format_display_date((string) $order['expected_receipt_date']);
+                        $orderDateText = elpis_format_display_date((string) $order['order_date']);
+                        $search = strtolower($order['document_no'] . ' ' . $order['item_no'] . ' ' . $purchaserText . ' ' . $order['status_label']);
+                        ?>
+                        <li class="elpis-loose-order" data-elpis-loose-order data-search-text="<?= elpis_h($search) ?>" data-has-problem="<?= $order['is_problem'] ? '1' : '0' ?>">
+                            <strong><?= elpis_h($order['document_no']) ?></strong>
+                            /<?= (int) $order['line_no'] ?>
+                            · <?= elpis_h($order['item_no']) ?>
+                            · <?= elpis_h(elpis_format_qty((float) $order['outstanding_qty'])) ?> <?= elpis_h($order['uom_code']) ?>
+                            · <?= elpis_h($expectedText !== '' ? $expectedText : LOC('elpis.receipt.missing')) ?>
+                            · <?= elpis_h($orderDateText !== '' ? $orderDateText : LOC('elpis.receipt.missing')) ?>
+                            · <?= elpis_h($purchaserText) ?>
+                            · <?= elpis_h($order['status_label']) ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+        </section>
+        <?php endif; ?>
     <?php endif; ?>
 
     <?php if (!function_exists('odata_mimir_enabled') || !odata_mimir_enabled() || (function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open())): ?>
@@ -1669,7 +1717,7 @@ if ($purchaser !== '') {
         var tokens = query === '' ? [] : query.split(/\s+/).filter(Boolean);
         var pinnedProjectNo = focusProjectNo();
         var visibleCount = 0;
-        projectItems.forEach(function (item) {
+        document.querySelectorAll('[data-elpis-project-item]').forEach(function (item) {
             var projectHaystack = item.getAttribute('data-search-text') || '';
             var projectNo = item.getAttribute('data-project-no') || '';
             var isPinned = pinnedProjectNo !== '' && projectNo === pinnedProjectNo;
@@ -1679,7 +1727,16 @@ if ($purchaser !== '') {
             item.classList.toggle('is-filtered-out', !projectVisible);
             item.classList.toggle('is-pinned', isPinned);
             item.classList.toggle('is-highlighted', isPinned);
-            if (projectVisible) {
+            if (!item.classList.contains('is-filtered-out') && !item.classList.contains('is-problem-hidden')) {
+                visibleCount += 1;
+            }
+        });
+        document.querySelectorAll('[data-elpis-loose-order]').forEach(function (item) {
+            var haystack = item.getAttribute('data-search-text') || '';
+            var visible = matchesTokens(haystack, tokens);
+            item.classList.toggle('is-filtered-out', !visible);
+            item.classList.toggle('is-problem-hidden', !!(projectsProblemsOnly && projectsProblemsOnly.checked) && item.getAttribute('data-has-problem') !== '1');
+            if (!item.classList.contains('is-filtered-out') && !item.classList.contains('is-problem-hidden')) {
                 visibleCount += 1;
             }
         });

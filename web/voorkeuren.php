@@ -73,6 +73,9 @@ for ($day = 1; $day <= 7; $day++) {
         .elpis-field { display: grid; gap: 8px; margin: 16px 0; }
         .elpis-field legend, .elpis-field > span { font-weight: 700; color: var(--kvt-perkins-blue); }
         .elpis-choice { display: flex; gap: 8px; align-items: center; padding: 8px 0; }
+        .elpis-status-choice { align-items: flex-start; }
+        .elpis-status-choice input { margin-top: 3px; }
+        .elpis-status-hint { display: block; margin-top: 2px; font-size: 0.85rem; font-weight: 400; line-height: 1.35; }
         .elpis-days { display: grid; gap: 4px; margin-left: 24px; }
         .elpis-days.is-hidden { display: none; }
         .elpis-btn { font: inherit; font-weight: 700; border-radius: 10px; border: 1px solid var(--kvt-perkins-blue); background: var(--kvt-main-blue); color: #fff; padding: 12px 14px; }
@@ -123,20 +126,29 @@ for ($day = 1; $day <= 7; $day++) {
             <fieldset class="elpis-field">
                 <legend><?= elpis_prefs_h(LOC('elpis.prefs.content')) ?></legend>
                 <?php foreach ([
-                    ELPIS_MAIL_CONTENT_ALL => 'elpis.prefs.content_all',
-                    ELPIS_MAIL_CONTENT_PROBLEMS => 'elpis.prefs.content_problems',
-                    ELPIS_MAIL_CONTENT_CUSTOM => 'elpis.prefs.custom',
-                ] as $value => $key): ?>
-                    <label class="elpis-choice">
+                    ELPIS_MAIL_CONTENT_ALL => ['elpis.prefs.content_all', ''],
+                    ELPIS_MAIL_CONTENT_PROBLEMS => ['elpis.prefs.content_problems', 'elpis.prefs.content_problems_hint'],
+                    ELPIS_MAIL_CONTENT_PURCHASER => ['elpis.prefs.content_purchaser', 'elpis.prefs.content_purchaser_hint'],
+                    ELPIS_MAIL_CONTENT_CUSTOM => ['elpis.prefs.custom', ''],
+                ] as $value => [$key, $hint]): ?>
+                    <label class="elpis-choice<?= $hint !== '' ? ' elpis-status-choice' : '' ?>">
                         <input type="radio" name="content" value="<?= elpis_prefs_h($value) ?>" data-elpis-content<?= $prefs['content'] === $value ? ' checked' : '' ?>>
-                        <span><?= elpis_prefs_h(LOC($key)) ?></span>
+                        <span>
+                            <?= elpis_prefs_h(LOC($key)) ?>
+                            <?php if ($hint !== ''): ?>
+                                <span class="elpis-muted elpis-status-hint"><?= elpis_prefs_h(LOC($hint)) ?></span>
+                            <?php endif; ?>
+                        </span>
                     </label>
                 <?php endforeach; ?>
                 <div class="elpis-days<?= $prefs['content'] === ELPIS_MAIL_CONTENT_CUSTOM ? '' : ' is-hidden' ?>" data-elpis-statuses>
                     <?php foreach (ELPI_LINE_STATUSES as $statusKey => $def): ?>
-                        <label class="elpis-choice">
+                        <label class="elpis-choice elpis-status-choice">
                             <input type="checkbox" name="statuses[]" value="<?= elpis_prefs_h($statusKey) ?>"<?= in_array($statusKey, $prefs['statuses'], true) ? ' checked' : '' ?>>
-                            <span><?= elpis_prefs_h(LOC($def['label'])) ?></span>
+                            <span>
+                                <?= elpis_prefs_h(LOC($def['label'])) ?>
+                                <span class="elpis-muted elpis-status-hint"><?= elpis_prefs_h(LOC($def['description'])) ?></span>
+                            </span>
                         </label>
                     <?php endforeach; ?>
                 </div>

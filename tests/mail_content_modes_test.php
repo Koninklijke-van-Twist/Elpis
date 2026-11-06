@@ -22,7 +22,7 @@ function fail(string $message): void
 // Mapping
 $red = elpis_mail_red_statuses();
 sort($red);
-if ($red !== ['DELIVERY_LATE', 'LATE', 'ORDER_TOO_LATE']) {
+if ($red !== ['DELIVERY_LATE', 'LATE', 'LEAD_TIME_INVALID', 'ORDER_TOO_LATE']) {
     fail('rode statussen: ' . json_encode($red));
 }
 $cases = [
@@ -34,6 +34,7 @@ $cases = [
     ['unconfirmed', [], 'custom', ['NO_DATE']],
     ['all', [], 'all', []],
     ['problems', ['LATE'], 'problems', []],
+    ['purchaser', ['STOCK'], 'purchaser', []],
     ['custom', [], 'problems', []],
     ['custom', ['BESTAAT_NIET'], 'problems', []],
     ['custom', ['NO_DATE', 'LATE', 'BESTAAT_NIET'], 'custom', null],
@@ -72,6 +73,25 @@ if (function_exists('saveUserPref')) {
     if (elpis_mail_prefs_for_email($email)['statuses'] !== elpis_mail_red_statuses()) {
         fail('legacy te laat');
     }
+    elpis_save_mail_prefs($email, ['frequency' => 'daily', 'content' => 'purchaser', 'statuses' => ['STOCK']]);
+    $p = elpis_mail_prefs_for_email($email);
+    if ($p['content'] !== 'purchaser' || $p['statuses'] !== []) {
+        fail('round-trip besteller-preset: ' . json_encode($p));
+    }
+    if ((loadUserPrefs($email)['elpis_mail_content'] ?? '') !== 'purchaser') {
+        fail('besteller-preset wordt als purchaser opgeslagen');
+    }
+    elpis_save_mail_prefs($email, ['frequency' => 'daily', 'content' => 'problems', 'statuses' => ['LATE']]);
+    $p = elpis_mail_prefs_for_email($email);
+    if ($p['content'] !== 'problems' || $p['statuses'] !== []) {
+        fail('round-trip PO-preset blijft problems: ' . json_encode($p));
+    }
+    saveUserPref($email, 'elpis_mail_content', 'problems');
+    saveUserPref($email, 'elpis_mail_statuses', json_encode(['LATE']));
+    $p = elpis_mail_prefs_for_email($email);
+    if ($p['content'] !== 'problems' || $p['statuses'] !== []) {
+        fail('oude probleemregels blijven de PO-preset: ' . json_encode($p));
+    }
 } else {
     fail('saveUserPref ontbreekt');
 }
@@ -99,6 +119,7 @@ $pick = static function ($prefs) use ($lines): array {
 $expect = [
     'alles' => [['content' => 'all'], ['NO_DATE', 'LATE', 'ORDERED', 'PICKED']],
     'probleemregels' => [['content' => 'problems'], ['NO_DATE', 'LATE']],
+    'besteller-preset' => [['content' => 'purchaser'], ['NO_DATE', 'LATE']],
     'aangepast' => [['content' => 'custom', 'statuses' => ['ORDERED', 'RETURN']], ['RETURN', 'ORDERED']],
     'legacy beide' => ['both', ['NO_DATE', 'LATE']],
     'legacy te laat' => ['late', ['LATE']],
