@@ -126,13 +126,19 @@ for ($day = 1; $day <= 7; $day++) {
             <fieldset class="elpis-field">
                 <legend><?= elpis_prefs_h(LOC('elpis.prefs.content')) ?></legend>
                 <?php foreach ([
-                    ELPIS_MAIL_CONTENT_ALL => 'elpis.prefs.content_all',
-                    ELPIS_MAIL_CONTENT_PROBLEMS => 'elpis.prefs.content_problems',
-                    ELPIS_MAIL_CONTENT_CUSTOM => 'elpis.prefs.custom',
-                ] as $value => $key): ?>
-                    <label class="elpis-choice">
+                    ELPIS_MAIL_CONTENT_ALL => ['elpis.prefs.content_all', ''],
+                    ELPIS_MAIL_CONTENT_PROBLEMS => ['elpis.prefs.content_problems', 'elpis.prefs.content_problems_hint'],
+                    ELPIS_MAIL_CONTENT_PURCHASER => ['elpis.prefs.content_purchaser', 'elpis.prefs.content_purchaser_hint'],
+                    ELPIS_MAIL_CONTENT_CUSTOM => ['elpis.prefs.custom', ''],
+                ] as $value => [$key, $hint]): ?>
+                    <label class="elpis-choice<?= $hint !== '' ? ' elpis-status-choice' : '' ?>">
                         <input type="radio" name="content" value="<?= elpis_prefs_h($value) ?>" data-elpis-content<?= $prefs['content'] === $value ? ' checked' : '' ?>>
-                        <span><?= elpis_prefs_h(LOC($key)) ?></span>
+                        <span>
+                            <?= elpis_prefs_h(LOC($key)) ?>
+                            <?php if ($hint !== ''): ?>
+                                <span class="elpis-muted elpis-status-hint"><?= elpis_prefs_h(LOC($hint)) ?></span>
+                            <?php endif; ?>
+                        </span>
                     </label>
                 <?php endforeach; ?>
                 <div class="elpis-days<?= $prefs['content'] === ELPIS_MAIL_CONTENT_CUSTOM ? '' : ' is-hidden' ?>" data-elpis-statuses>

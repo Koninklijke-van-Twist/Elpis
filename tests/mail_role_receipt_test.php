@@ -135,6 +135,58 @@ if (!elpis_mail_line_included($open + $onlyBuyer, ['content' => 'all'])) {
     fail('alleen besteller: nog niet ontvangen blijft bij alles');
 }
 
+$po = elpis_mail_po_statuses();
+$problemKeys = elpis_problem_status_keys();
+sort($po);
+sort($problemKeys);
+if ($po !== ['DELIVERY_LATE', 'INBOUND', 'LATE', 'NO_DATE', 'ORDER_TOO_LATE', 'PARTIAL_RECEIVED', 'PARTIAL_STOCK', 'RECEIVED_TO_PICK', 'STOCK', 'TO_ORDER']
+    || $po !== $problemKeys) {
+    fail('PO-preset wijkt af van de probleemstatussen: ' . json_encode($po));
+}
+if (ELPIS_MAIL_PURCHASER_STATUSES !== ['LATE', 'DELIVERY_LATE', 'ORDER_TOO_LATE', 'NO_DATE', 'TO_ORDER']) {
+    fail('besteller-preset: ' . json_encode(ELPIS_MAIL_PURCHASER_STATUSES));
+}
+$purchaser = ['content' => 'purchaser'];
+if (elpis_mail_line_matches_content($received, $purchaser) || elpis_mail_line_matches_content($inbound, $purchaser)
+    || elpis_mail_line_matches_content($partialReceived, $purchaser) || elpis_mail_line_matches_content($stock, $purchaser)) {
+    fail('besteller-preset laat magazijn, voorraad en pick weg');
+}
+if (!elpis_mail_line_matches_content($half, $purchaser) || !elpis_mail_line_matches_content($open, $purchaser)
+    || !elpis_mail_line_matches_content($stock, $problems) || !elpis_mail_line_matches_content($received, $problems)) {
+    fail('PO-preset houdt voorraad en ontvangen; besteller-preset houdt het leverprobleem');
+}
+if (elpis_mail_line_included($received + $bothRoles, $purchaser) || elpis_mail_line_included($stock + $onlyPm, $purchaser)) {
+    fail('besteller-preset geldt ook op regels waar je projectmanager bent');
+}
+if (!elpis_mail_line_included($half + $onlyBuyer, $purchaser) || !elpis_mail_line_included($half + $bothRoles, $purchaser)) {
+    fail('gedeeltelijk ontvangen met leverprobleem blijft in de besteller-preset');
+}
+$customPick = ['content' => 'custom', 'statuses' => ['STOCK', 'RECEIVED_TO_PICK']];
+if (!elpis_mail_line_included($stock + $onlyBuyer, $customPick) || elpis_mail_line_included($received + $onlyBuyer, $customPick)) {
+    fail('aangepast houdt voorraad voor alleen-besteller en haalt de ontvangstgrens niet onderuit');
+}
+if (!elpis_mail_line_included($received + $bothRoles, ['content' => 'custom', 'statuses' => ['RECEIVED_TO_PICK']])) {
+    fail('dubbelrol met aangepast houdt ontvangen-nog-picken');
+}
+if (elpis_default_mail_prefs()['content'] !== 'problems') {
+    fail('default blijft de PO-preset');
+}
+if (!function_exists('saveUserPref')) {
+    fail('saveUserPref ontbreekt');
+}
+elpis_save_mail_prefs('preset-role@kvt.nl', ['frequency' => 'daily', 'content' => 'purchaser', 'statuses' => ['STOCK']]);
+$stored = elpis_mail_prefs_for_email('preset-role@kvt.nl');
+if ($stored['content'] !== 'purchaser' || $stored['statuses'] !== []) {
+    fail('bewaren besteller-preset: ' . json_encode($stored));
+}
+saveUserPref('preset-role@kvt.nl', 'elpis_mail_content', 'problems');
+saveUserPref('preset-role@kvt.nl', 'elpis_mail_statuses', json_encode(['LATE']));
+$legacy = elpis_mail_prefs_for_email('preset-role@kvt.nl');
+if ($legacy['content'] !== 'problems' || $legacy['statuses'] !== []
+    || !elpis_mail_line_included($received + $onlyPm, $legacy) || !elpis_mail_line_included($stock + $onlyBuyer, $legacy)) {
+    fail('oude probleemregels blijven de ruime PO-selectie: ' . json_encode($legacy));
+}
+
 $sent = [];
 $GLOBALS['ELPIS_MAIL_SENDER'] = static function (string $to, string $subject, string $plain, string $html) use (&$sent): bool {
     $sent[] = compact('to', 'subject', 'plain', 'html');
@@ -271,9 +323,38 @@ if (strpos($plain, '== Zaak ==') > strpos($plain, '== Ander ==')) {
     fail('bedrijfsvolgorde blijft de invoer');
 }
 
+elpis_save_mail_prefs('rdboer@kvt.nl', ['frequency' => 'daily', 'content' => 'purchaser']);
+$sent = [];
+elpis_reset_fetch_memo();
+elpis_dispatch_pm_digests(['K' => [
+    'projects' => [
+        ['no' => 'PA', 'description' => 'A', 'project_manager' => 'KVT\\RDBOER'],
+        ['no' => 'PB', 'description' => 'B', 'project_manager' => 'KVT\\XPM'],
+    ],
+    'lines' => [
+        'PA' => [
+            array_merge($received, ['item_no' => 'REC-PO', 'purchasers' => [$jvde]]),
+            array_merge($stock, ['item_no' => 'STOK-PO', 'purchasers' => []]),
+        ],
+        'PB' => [
+            array_merge($half, ['item_no' => 'HALF-B', 'purchasers' => [$rdb]]),
+            array_merge($received, ['item_no' => 'REC-B', 'purchasers' => [$rdb]]),
+        ],
+    ],
+]], '2026-10-20');
+$presetMails = $mine();
+if (count($presetMails) !== 1) {
+    fail('besteller-preset: één mail: ' . count($presetMails));
+}
+$presetPlain = $presetMails[0]['plain'];
+if (substr_count($presetPlain, '| HALF-B |') !== 1 || str_contains($presetPlain, 'REC-PO')
+    || str_contains($presetPlain, 'STOK-PO') || str_contains($presetPlain, 'REC-B')) {
+    fail('besteller-preset houdt alleen het open leverprobleem: ' . $presetPlain);
+}
+
 $prefsSrc = (string) file_get_contents(dirname(__DIR__) . '/web/voorkeuren.php');
-if (!str_contains($prefsSrc, "LOC(\$def['description'])")) {
-    fail('aangepast toont de statusuitleg niet');
+if (!str_contains($prefsSrc, "LOC(\$def['description'])") || !str_contains($prefsSrc, 'ELPIS_MAIL_CONTENT_PURCHASER')) {
+    fail('voorkeuren missen de statusuitleg of de besteller-preset');
 }
 $receivedHint = LOC(ELPI_LINE_STATUSES['RECEIVED_TO_PICK']['description']);
 if ($receivedHint !== 'Ontvangen of gereserveerd voor dit project (niet uit vrije voorraad), maar nog niet gepicked.') {

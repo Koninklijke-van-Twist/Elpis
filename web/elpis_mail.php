@@ -13,11 +13,15 @@ const ELPIS_MAIL_FREQ_NEVER = 'never';
 const ELPIS_MAIL_CONTENT_LATE = 'late';
 const ELPIS_MAIL_CONTENT_UNCONFIRMED = 'unconfirmed';
 const ELPIS_MAIL_CONTENT_BOTH = 'both';
-// Inhoud (Tim 4 nov): alles / probleemregels (default) / aangepast (eigen statussen).
+// Inhoud: alles / PO-preset (opgeslagen als problems, default) / besteller-preset / aangepast.
 // late/unconfirmed/both zijn oude waarden en worden bij het lezen gemigreerd.
+// problems blijft de sleutel: bestaande gebruikers houden de ruime probleemselectie.
 const ELPIS_MAIL_CONTENT_ALL = 'all';
 const ELPIS_MAIL_CONTENT_PROBLEMS = 'problems';
+const ELPIS_MAIL_CONTENT_PURCHASER = 'purchaser';
 const ELPIS_MAIL_CONTENT_CUSTOM = 'custom';
+// Besteller-preset: alleen leverproblemen vóór ontvangst. Geen magazijn, voorraad of pick.
+const ELPIS_MAIL_PURCHASER_STATUSES = ['LATE', 'DELIVERY_LATE', 'ORDER_TOO_LATE', 'NO_DATE', 'TO_ORDER'];
 // Altijd buiten "Alles": grijze statussen (Retour/n.v.t., Afgesloten) vragen geen actie.
 const ELPIS_MAIL_ALL_EXCLUDED_STATUSES = ['RETURN', 'CLOSED'];
 // Geen status "Ontvangen". Dit is die grens: inkoop is binnen, rest is pick of magazijn.
@@ -106,9 +110,16 @@ function elpis_mail_red_statuses(): array
     return array_keys(array_filter(ELPI_LINE_STATUSES, static fn (array $d): bool => $d['tone'] === 'alert'));
 }
 
+/** PO-preset = de bestaande probleemstatussen. */
+function elpis_mail_po_statuses(): array
+{
+    return elpis_problem_status_keys();
+}
+
 /**
- * Oude en nieuwe inhoud -> [content, statuses]. Mapping: both/leeg/onbekend -> problems;
- * late -> custom + rode statussen; unconfirmed -> custom + NO_DATE; custom zonder geldige status -> problems.
+ * Oude en nieuwe inhoud -> [content, statuses]. Mapping: both/leeg/onbekend -> problems (PO-preset);
+ * purchaser blijft de besteller-preset; late -> custom + rode statussen; unconfirmed -> custom + NO_DATE;
+ * custom zonder geldige status -> problems.
  */
 function elpis_mail_normalize_content($content, $statuses): array
 {
@@ -125,6 +136,9 @@ function elpis_mail_normalize_content($content, $statuses): array
     }
     if ($content === ELPIS_MAIL_CONTENT_ALL) {
         return [ELPIS_MAIL_CONTENT_ALL, []];
+    }
+    if ($content === ELPIS_MAIL_CONTENT_PURCHASER) {
+        return [ELPIS_MAIL_CONTENT_PURCHASER, []];
     }
     if ($content === ELPIS_MAIL_CONTENT_CUSTOM) {
         $valid = array_values(array_intersect(array_keys(ELPI_LINE_STATUSES), array_map('strval', is_array($statuses) ? $statuses : [])));
@@ -240,6 +254,9 @@ function elpis_mail_line_matches_content(array $line, $prefs): bool
     }
     if ($content === ELPIS_MAIL_CONTENT_CUSTOM) {
         return in_array($key, $statuses, true);
+    }
+    if ($content === ELPIS_MAIL_CONTENT_PURCHASER) {
+        return in_array($key, ELPIS_MAIL_PURCHASER_STATUSES, true);
     }
 
     return elpis_status_is_problem($key);
