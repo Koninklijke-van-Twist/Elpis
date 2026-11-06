@@ -148,9 +148,8 @@ function elpis_line_lead_time_days(array $line, ?string $today = null): ?int
 }
 
 /**
- * Levertijd ongeldig: beide datums echt, verwachte ontvangst op of vóór besteldatum, inkoop nog open.
- * Leeg of 0001-01-01 is onbekend. Ontvangen of gepickt blijft de bestaande status.
- * order_date komt niet uit LVS_Latest_Order_Date; dat is de uiterste besteldatum.
+ * Levertijd ongeldig: Expected_Receipt_Date en Order_Date van dezelfde inkoopregel.
+ * Niet de werkorder-KVT-datum en niet alloc_unlinked_date. Leeg of 0001-01-01 is onbekend.
  */
 function elpis_line_lead_time_invalid(array $line): bool
 {
@@ -160,10 +159,7 @@ function elpis_line_lead_time_invalid(array $line): bool
     if (!elpis_line_purchase_outstanding_open($line)) {
         return false;
     }
-    $expected = elpis_normalize_bc_date((string) ($line['expected_receipt_date'] ?? ''));
-    if ($expected === '') {
-        $expected = elpis_normalize_bc_date((string) ($line['alloc_unlinked_date'] ?? ''));
-    }
+    $expected = elpis_normalize_bc_date((string) ($line['purchase_expected_receipt_date'] ?? ''));
     $ordered = elpis_normalize_bc_date((string) ($line['order_date'] ?? ''));
     if ($expected === '' || $ordered === '') {
         return false;
@@ -487,6 +483,9 @@ function elpis_line_status(array $line, ?string $today = null): array
         $date = elpis_normalize_bc_date((string) ($line['alloc_unlinked_date'] ?? ''));
     }
     $date = $date === '' ? '' : substr($date, 0, 10);
+    $purchaseExpected = elpis_normalize_bc_date((string) ($line['purchase_expected_receipt_date'] ?? ''));
+    $purchaseExpected = $purchaseExpected === '' ? '' : substr($purchaseExpected, 0, 10);
+    $purchaseExpectedDisplay = elpis_format_display_date($purchaseExpected);
     $partial = $p > 0.00001 && $p + 0.00001 < $n;
     $need = elpis_line_need_date($line);
     $lead = elpis_line_lead_time_days($line, $today);
@@ -551,7 +550,7 @@ function elpis_line_status(array $line, ?string $today = null): array
             $parts[] = LOC('elpis.receipt.order_too_late', (string) $lead);
             break;
         case 'LEAD_TIME_INVALID':
-            $parts[] = LOC('elpis.receipt.lead_time_invalid', $display);
+            $parts[] = LOC('elpis.receipt.lead_time_invalid', $purchaseExpectedDisplay !== '' ? $purchaseExpectedDisplay : '—');
             break;
         case 'INBOUND':
             $parts[] = LOC('elpis.receipt.inbound', elpis_format_qty((float) $line['inbound_qty']));
@@ -601,7 +600,7 @@ function elpis_line_status(array $line, ?string $today = null): array
                 : LOC('elpis.reason.order_too_late', trim((string) ($line['critical_lead_time'] ?? '')) !== '' ? trim((string) $line['critical_lead_time']) : ($lead . 'D'), $needDisplay);
             break;
         case 'LEAD_TIME_INVALID':
-            $why = LOC('elpis.reason.lead_time_invalid', $display !== '' ? $display : '—', elpis_format_display_date(substr(elpis_normalize_bc_date((string) ($line['order_date'] ?? '')), 0, 10)));
+            $why = LOC('elpis.reason.lead_time_invalid', $purchaseExpectedDisplay !== '' ? $purchaseExpectedDisplay : '—', elpis_format_display_date(substr(elpis_normalize_bc_date((string) ($line['order_date'] ?? '')), 0, 10)));
             break;
         case 'NO_DATE':
             $why = LOC('elpis.reason.no_date');
@@ -2983,6 +2982,7 @@ function elpis_loose_purchase_status_line(array $purchase): array
         'kvt_qty_picked' => 0,
         'free_stock' => 0,
         'expected_receipt_date' => (string) ($purchase['expected_receipt_date'] ?? ''),
+        'purchase_expected_receipt_date' => (string) ($purchase['expected_receipt_date'] ?? ''),
         'order_date' => (string) ($purchase['order_date'] ?? ''),
         'planning_date' => '',
         'uom_code' => (string) ($purchase['uom_code'] ?? ''),
@@ -4267,6 +4267,8 @@ function elpis_finalize_line(
             // Alleen de besteldatum van de inkoopregel, nooit de kop of documentdatum.
             $line['order_date'] = substr($orderDate, 0, 10);
         }
+        $purchaseExpected = elpis_normalize_bc_date((string) ($purchase['expected_receipt_date'] ?? ''));
+        $line['purchase_expected_receipt_date'] = $purchaseExpected === '' ? '' : substr($purchaseExpected, 0, 10);
         if (array_key_exists('outstanding_qty', $purchase) && $purchase['outstanding_qty'] !== null && $purchase['outstanding_qty'] !== '') {
             $line['purchase_outstanding_qty'] = (float) $purchase['outstanding_qty'];
         }

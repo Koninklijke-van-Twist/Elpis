@@ -1717,7 +1717,7 @@ if ($companyChosen && !$deferProjectsLoad) {
         var tokens = query === '' ? [] : query.split(/\s+/).filter(Boolean);
         var pinnedProjectNo = focusProjectNo();
         var visibleCount = 0;
-        projectItems.forEach(function (item) {
+        document.querySelectorAll('[data-elpis-project-item]').forEach(function (item) {
             var projectHaystack = item.getAttribute('data-search-text') || '';
             var projectNo = item.getAttribute('data-project-no') || '';
             var isPinned = pinnedProjectNo !== '' && projectNo === pinnedProjectNo;
@@ -1727,7 +1727,7 @@ if ($companyChosen && !$deferProjectsLoad) {
             item.classList.toggle('is-filtered-out', !projectVisible);
             item.classList.toggle('is-pinned', isPinned);
             item.classList.toggle('is-highlighted', isPinned);
-            if (projectVisible) {
+            if (!item.classList.contains('is-filtered-out') && !item.classList.contains('is-problem-hidden')) {
                 visibleCount += 1;
             }
         });
@@ -1736,6 +1736,9 @@ if ($companyChosen && !$deferProjectsLoad) {
             var visible = matchesTokens(haystack, tokens);
             item.classList.toggle('is-filtered-out', !visible);
             item.classList.toggle('is-problem-hidden', !!(projectsProblemsOnly && projectsProblemsOnly.checked) && item.getAttribute('data-has-problem') !== '1');
+            if (!item.classList.contains('is-filtered-out') && !item.classList.contains('is-problem-hidden')) {
+                visibleCount += 1;
+            }
         });
         if (searchEmpty) {
             searchEmpty.classList.toggle('is-visible', tokens.length > 0 && visibleCount === 0);

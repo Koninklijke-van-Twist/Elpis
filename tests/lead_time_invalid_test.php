@@ -19,7 +19,7 @@ function fail(string $message): void
 
 function line(array $extra = []): array
 {
-    return array_merge([
+    $row = array_merge([
         'quantity' => 1,
         'qty_received' => 0,
         'purchase_order_no' => 'PO1',
@@ -32,6 +32,11 @@ function line(array $extra = []): array
         'order_date' => '2026-11-01',
         'planning_date' => '2026-12-01',
     ], $extra);
+    if (!array_key_exists('purchase_expected_receipt_date', $extra)) {
+        $row['purchase_expected_receipt_date'] = $row['expected_receipt_date'];
+    }
+
+    return $row;
 }
 
 if (elpis_line_status(line(['expected_receipt_date' => '2026-11-01', 'order_date' => '2026-11-01']))['key'] !== 'LEAD_TIME_INVALID') {
@@ -98,6 +103,58 @@ if (!elpis_status_is_problem('LEAD_TIME_INVALID') || !in_array('LEAD_TIME_INVALI
 }
 if (LOC('elpis.status.lead_time_invalid') !== 'Levertijd ongeldig') {
     fail('Nederlandse statusnaam');
+}
+
+$workOrderWins = line([
+    'expected_receipt_date' => '2026-05-01',
+    'purchase_expected_receipt_date' => '',
+    'order_date' => '2026-05-27',
+    'alloc_unlinked_date' => '2026-05-01',
+]);
+if (elpis_line_status($workOrderWins)['key'] === 'LEAD_TIME_INVALID') {
+    fail('werkorder- of allocdatum vult een ontbrekende inkoopverwachting niet in');
+}
+
+$scenarioA = [
+    'item_no' => 'PI20001871',
+    'quantity' => 1,
+    'purchase_order_no' => 'PO12602946',
+    'purchase_order_line_no' => 10000,
+    'work_order_no' => 'WO2607810',
+    'expected_receipt_date' => '2026-06-01',
+    'planning_date' => '2026-07-29',
+];
+$poMay = [
+    'document_no' => 'PO12602946',
+    'line_no' => 10000,
+    'item_no' => 'PI20001871',
+    'quantity' => 1,
+    'outstanding_qty' => 1,
+    'order_date' => '2026-05-27',
+    'expected_receipt_date' => '2026-05-27',
+];
+$finalA = elpis_finalize_line($scenarioA, 'PRJ', ['PO12602946|10000' => $poMay], [], [], [], [], [], [], []);
+if (($finalA['expected_receipt_date'] ?? '') !== '2026-06-01' || ($finalA['purchase_expected_receipt_date'] ?? '') !== '2026-05-27'
+    || elpis_line_status($finalA)['key'] !== 'LEAD_TIME_INVALID') {
+    fail('scenario A: PO 27 mei blijft ongeldig terwijl de werkorder 1 juni verwacht: ' . json_encode([
+        $finalA['expected_receipt_date'] ?? null,
+        $finalA['purchase_expected_receipt_date'] ?? null,
+        elpis_line_status($finalA)['key'],
+    ]));
+}
+$poLater = $poMay;
+$poLater['expected_receipt_date'] = '2026-06-15';
+$scenarioB = $scenarioA;
+$scenarioB['expected_receipt_date'] = '2026-05-27';
+$finalB = elpis_finalize_line($scenarioB, 'PRJ', ['PO12602946|10000' => $poLater], [], [], [], [], [], [], []);
+if (elpis_line_status($finalB)['key'] === 'LEAD_TIME_INVALID' || ($finalB['expected_receipt_date'] ?? '') !== '2026-05-27') {
+    fail('scenario B: latere PO-verwachting is niet ongeldig door de werkorderdatum: ' . elpis_line_status($finalB)['key']);
+}
+$poMissing = $poMay;
+$poMissing['expected_receipt_date'] = '';
+$finalMissing = elpis_finalize_line($scenarioA, 'PRJ', ['PO12602946|10000' => $poMissing], [], [], [], [], [], [], []);
+if (elpis_line_status($finalMissing)['key'] === 'LEAD_TIME_INVALID') {
+    fail('ontbrekende PO-verwachting blijft onbekend');
 }
 
 echo "OK\n";
