@@ -1,8 +1,11 @@
 <?php
 
 /**
- * Alleen-lezen export van data/maillog. Login én data/maillog_readers.json.
- * Ontbreekt die lijst, dan weigert het endpoint. Geen BC, geen mail, geen cache-refresh.
+ * Alleen-lezen export voor diagnoselezers.
+ * Eerst de gewone login. Een trusted/localhost-identiteit telt niet.
+ * Het adres moet daarnaast in data/maillog/readers.json staan, in de map
+ * die HTTP al weigert. Dit is beheerdiagnose: een treffer kan andermans adres tonen.
+ * Geen BC, geen mail, geen cache-refresh.
  */
 
 require_once __DIR__ . '/auth.php';
@@ -20,7 +23,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
     exit;
 }
 
-$email = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
-[$status, $body] = elpis_maillog_export_response($email, $_GET);
+$user = is_array($_SESSION['user'] ?? null) ? $_SESSION['user'] : [];
+$trusted = function_exists('is_trusted_requester') && is_trusted_requester();
+[$status, $body] = elpis_maillog_export_response($user, $_GET, $trusted);
 http_response_code($status);
 echo json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

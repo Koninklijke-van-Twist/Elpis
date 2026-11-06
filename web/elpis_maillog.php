@@ -6,6 +6,7 @@
  */
 
 const ELPIS_MAILLOG_RETENTION_DAYS = 7;
+const ELPIS_MAILLOG_HTACCESS = "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n    Deny from all\n</IfModule>\n";
 
 function elpis_maillog_dir(): string
 {
@@ -15,7 +16,7 @@ function elpis_maillog_dir(): string
     }
     $htaccess = $dir . '/.htaccess';
     if (!is_file($htaccess)) {
-        @file_put_contents($htaccess, "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n    Deny from all\n</IfModule>\n");
+        @file_put_contents($htaccess, ELPIS_MAILLOG_HTACCESS);
     }
 
     return $dir;
@@ -86,10 +87,66 @@ function elpis_maillog_cleanup(int $days = ELPIS_MAILLOG_RETENTION_DAYS): void
 
 const ELPIS_MAILLOG_EXPORT_MAX_DAYS = 7;
 const ELPIS_MAILLOG_EXPORT_MAX_LINES = 100;
+const ELPIS_MAILLOG_EXPORT_MAX_LINE_BYTES = 8192;
+const ELPIS_MAILLOG_EXPORT_MAX_BYTES = 1048576;
 
-function elpis_maillog_readers_path(): string
+/**
+ * Bestaande maillogmap, zonder mkdir. Alleen als .htaccess HTTP nog weigert
+ * en de map binnen de datamap blijft (geen symlink naar buiten).
+ */
+function elpis_maillog_existing_dir(): ?string
 {
-    return elpis_data_dir() . '/maillog_readers.json';
+    $override = $GLOBALS['ELPIS_DATA_DIR'] ?? null;
+    $root = is_string($override) && trim($override) !== '' ? $override : (__DIR__ . '/data');
+    if (!is_dir($root)) {
+        return null;
+    }
+    $rootReal = realpath($root);
+    if ($rootReal === false) {
+        return null;
+    }
+    $dir = $rootReal . DIRECTORY_SEPARATOR . 'maillog';
+    if (!is_dir($dir)) {
+        return null;
+    }
+    $real = realpath($dir);
+    if ($real === false || !str_starts_with($real, $rootReal . DIRECTORY_SEPARATOR)) {
+        return null;
+    }
+    $dirPerms = fileperms($real);
+    if ($dirPerms === false || ($dirPerms & 0007) !== 0) {
+        return null;
+    }
+    $htaccess = $real . DIRECTORY_SEPARATOR . '.htaccess';
+    $htPerms = is_file($htaccess) ? fileperms($htaccess) : false;
+    $rules = $htPerms !== false ? @file_get_contents($htaccess) : false;
+    if ($htPerms === false || ($htPerms & 0002) !== 0 || $rules !== ELPIS_MAILLOG_HTACCESS) {
+        return null;
+    }
+
+    return $real;
+}
+
+function elpis_maillog_readers_path(): ?string
+{
+    $dir = elpis_maillog_existing_dir();
+    if ($dir === null) {
+        return null;
+    }
+    $path = $dir . DIRECTORY_SEPARATOR . 'readers.json';
+    if (!is_file($path)) {
+        return null;
+    }
+    $real = realpath($path);
+    if ($real === false || !str_starts_with($real, $dir . DIRECTORY_SEPARATOR)) {
+        return null;
+    }
+    $perms = fileperms($real);
+    if ($perms === false || ($perms & 0007) !== 0) {
+        return null;
+    }
+
+    return $real;
 }
 
 /** Fail-closed: geen bestand, geen geldige lijst, of het adres staat er niet in. */
@@ -100,7 +157,7 @@ function elpis_maillog_reader_allowed(string $email): bool
         return false;
     }
     $path = elpis_maillog_readers_path();
-    if (!is_file($path)) {
+    if ($path === null) {
         return false;
     }
     $decoded = json_decode((string) file_get_contents($path), true);
@@ -121,7 +178,9 @@ function elpis_maillog_redact(string $value): string
 {
     $value = preg_replace('#https?://\S+#i', '[url]', $value) ?? $value;
     $value = preg_replace('/\b[\w.-]*voorkeuren\.php\S*/i', '[url]', $value) ?? $value;
-    $value = preg_replace('/\b(api[_-]?key|token|bearer|password)\s*[:=]\s*\S+/i', '$1=[redacted]', $value) ?? $value;
+    $value = preg_replace('/\bauthorization\s+bearer\s+\S+/i', 'authorization bearer [redacted]', $value) ?? $value;
+    $value = preg_replace('/\bbearer\s+\S+/i', 'bearer [redacted]', $value) ?? $value;
+    $value = preg_replace('/\b(access_token|api[_-]?key|token|password)\b\s*[:=]?\s*\S+/i', '$1=[redacted]', $value) ?? $value;
 
     return $value;
 }
@@ -194,22 +253,26 @@ function elpis_maillog_export_filter(array $query): ?array
     ];
 }
 
-function elpis_maillog_day_path(string $date): ?string
+/** null = geen bestand, false = pad valt buiten de maillogmap. */
+function elpis_maillog_day_path(string $date): string|false|null
 {
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) !== 1) {
         return null;
     }
-    $dir = realpath(elpis_maillog_dir());
-    if ($dir === false) {
+    $dir = elpis_maillog_existing_dir();
+    if ($dir === null) {
         return null;
     }
     $path = $dir . DIRECTORY_SEPARATOR . $date . '.jsonl';
-    if (!is_file($path)) {
+    if (!file_exists($path)) {
         return null;
+    }
+    if (!is_file($path)) {
+        return false;
     }
     $real = realpath($path);
     if ($real === false || !str_starts_with($real, $dir . DIRECTORY_SEPARATOR)) {
-        return null;
+        return false;
     }
 
     return $real;
@@ -217,19 +280,36 @@ function elpis_maillog_day_path(string $date): ?string
 
 function elpis_maillog_export(array $filter): array
 {
+    if (elpis_maillog_existing_dir() === null) {
+        return ['complete' => false];
+    }
     $mails = [];
     $count = 0;
-    $truncated = false;
+    $bytes = 0;
     foreach ($filter['dates'] as $date) {
         $path = elpis_maillog_day_path($date);
+        if ($path === false) {
+            return ['complete' => false];
+        }
         if ($path === null) {
             continue;
         }
         $handle = fopen($path, 'rb');
         if ($handle === false) {
-            continue;
+            return ['complete' => false];
         }
-        while (($row = fgets($handle)) !== false) {
+        while (!feof($handle)) {
+            $row = fgets($handle, ELPIS_MAILLOG_EXPORT_MAX_LINE_BYTES);
+            if ($row === false) {
+                break;
+            }
+            $bytes += strlen($row);
+            $tooLong = strlen($row) >= ELPIS_MAILLOG_EXPORT_MAX_LINE_BYTES - 1 && !str_ends_with($row, "\n");
+            if ($tooLong || $bytes > ELPIS_MAILLOG_EXPORT_MAX_BYTES || $count >= ELPIS_MAILLOG_EXPORT_MAX_LINES) {
+                fclose($handle);
+
+                return ['complete' => false];
+            }
             $entry = json_decode($row, true);
             if (!is_array($entry)) {
                 continue;
@@ -242,6 +322,11 @@ function elpis_maillog_export(array $filter): array
             foreach (is_array($entry['lines'] ?? null) ? $entry['lines'] : [] as $line) {
                 if (!is_array($line)) {
                     continue;
+                }
+                if ($count >= ELPIS_MAILLOG_EXPORT_MAX_LINES) {
+                    fclose($handle);
+
+                    return ['complete' => false];
                 }
                 $project = trim((string) ($line['project'] ?? ''));
                 $item = trim((string) ($line['item'] ?? ''));
@@ -264,10 +349,6 @@ function elpis_maillog_export(array $filter): array
                     'reason' => elpis_maillog_redact(trim((string) ($line['reason'] ?? ''))),
                 ];
                 $count++;
-                if ($count >= ELPIS_MAILLOG_EXPORT_MAX_LINES) {
-                    $truncated = true;
-                    break 2;
-                }
             }
             if ($lines === []) {
                 continue;
@@ -280,21 +361,35 @@ function elpis_maillog_export(array $filter): array
             ];
         }
         fclose($handle);
-        if ($truncated) {
-            break;
-        }
     }
 
     return [
+        'complete' => true,
         'from' => $filter['dates'][0],
         'to' => $filter['dates'][count($filter['dates']) - 1],
-        'truncated' => $truncated,
         'mails' => $mails,
     ];
 }
 
-function elpis_maillog_export_response(string $email, array $query): array
+/**
+ * Echte login: e-mail, api_key en oid, gecontroleerd met verify_rotating_api_key.
+ * Een trusted-request of een sessie met alleen een gezet adres telt niet.
+ * Daarna moet het adres op de serverlijst staan.
+ */
+function elpis_maillog_export_response(array $sessionUser, array $query, bool $trustedRequest): array
 {
+    if ($trustedRequest) {
+        return [403, ['error' => 'forbidden']];
+    }
+    $email = strtolower(trim((string) ($sessionUser['email'] ?? '')));
+    $apiKey = trim((string) ($sessionUser['api_key'] ?? ''));
+    $oid = strtolower(trim((string) ($sessionUser['oid'] ?? '')));
+    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL) || $apiKey === '' || $oid === '') {
+        return [403, ['error' => 'forbidden']];
+    }
+    if (!function_exists('verify_rotating_api_key') || !verify_rotating_api_key($oid, $apiKey)) {
+        return [403, ['error' => 'forbidden']];
+    }
     if (!elpis_maillog_reader_allowed($email)) {
         return [403, ['error' => 'forbidden']];
     }
@@ -302,6 +397,10 @@ function elpis_maillog_export_response(string $email, array $query): array
     if ($filter === null) {
         return [400, ['error' => 'bad_request']];
     }
+    $export = elpis_maillog_export($filter);
+    if (empty($export['complete'])) {
+        return [413, ['error' => 'incomplete', 'complete' => false]];
+    }
 
-    return [200, elpis_maillog_export($filter)];
+    return [200, $export];
 }
